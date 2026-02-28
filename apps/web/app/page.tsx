@@ -241,6 +241,11 @@ export default function HomePage() {
         return;
       }
       const latest = logs[0];
+      if (!latest) {
+        setMealMessage({ type: "error", text: `${label} 기록을 읽어오지 못했습니다.` });
+        setMealState("error");
+        return;
+      }
       setMealForm({
         date,
         mealType: latest.mealType,
@@ -268,6 +273,9 @@ export default function HomePage() {
       const logs = await fetchMealLogsByDate(sessionId, date);
       if (logs.length > 0) {
         const latest = logs[0];
+        if (!latest) {
+          continue;
+        }
         setMealForm({
           date,
           mealType: latest.mealType,
