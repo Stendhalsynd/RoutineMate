@@ -1,0 +1,28 @@
+{
+  "name": "@routinemate/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "echo 'web lint placeholder'",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx tests/*.test.ts"
+  },
+  "dependencies": {
+    "@routinemate/api-contract": "0.1.0",
+    "@routinemate/domain": "0.1.0",
+    "@routinemate/ui": "0.1.0",
+    "next": "15.1.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/react": "19.0.2",
+    "@types/react-dom": "19.0.2",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

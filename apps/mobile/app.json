@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "RoutineMate",
+    "slug": "routine-mate",
+    "scheme": "routinemate",
+    "orientation": "portrait",
+    "platforms": [
+      "android"
+    ],
+    "android": {
+      "package": "com.routinemate.app"
+    }
+  }
+}
