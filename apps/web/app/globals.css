@@ -144,6 +144,10 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.full-span {
+  grid-column: 1 / -1;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -175,6 +179,26 @@ p {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.recommend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recommend-chip {
+  border: 1px solid var(--border);
+  background: #f6faf7;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.recommend-chip:hover {
+  border-color: var(--accent);
 }
 
 .status {
