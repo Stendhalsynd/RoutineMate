@@ -152,6 +152,23 @@ export interface DashboardSummary {
   latestBodyFatPct: number | null;
   daily: DailyProgress[];
   goals: GoalProgress[];
+  consistencyMeta?: DashboardConsistencyMeta;
+}
+
+export type QuickLogSource = "manual" | "copied_yesterday" | "copied_recent";
+
+export interface WorkoutSuggestion {
+  bodyPart: BodyPart;
+  purpose: WorkoutPurpose;
+  tool: WorkoutTool;
+  exerciseName: string;
+  reason?: string;
+}
+
+export interface DashboardConsistencyMeta {
+  source: "notion";
+  refreshedAt: string;
+  range: RangeKey;
 }
 
 const INTENSITY_MULTIPLIER: Record<WorkoutIntensity, number> = {

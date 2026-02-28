@@ -1,32 +1,28 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { aggregateDashboard } from "@/lib/dashboard";
 import type {
-  BodyMetric,
   BodyPart,
+  DashboardSummary,
   Goal,
-  MealLog,
   MealType,
   PortionSize,
   RangeKey,
   WorkoutIntensity,
-  WorkoutLog,
   WorkoutPurpose,
+  WorkoutSuggestion,
   WorkoutTool
 } from "@routinemate/domain";
 
 type MessageType = "error" | "success" | "info";
-
 type Message = {
   type: MessageType;
   text: string;
 };
 
-type LocalSession = {
+type SessionPayload = {
   sessionId: string;
   userId: string;
-  createdAt: string;
 };
 
 type GoalForm = {
@@ -51,6 +47,12 @@ type WorkoutForm = {
   exerciseName: string;
   intensity: WorkoutIntensity;
   durationMinutes: string;
+};
+
+type BodyMetricForm = {
+  date: string;
+  weightKg: string;
+  bodyFatPct: string;
 };
 
 const ranges: RangeKey[] = ["7d", "30d", "90d"];
@@ -102,25 +104,6 @@ const intensityOptions: Array<{ value: WorkoutIntensity; label: string }> = [
   { value: "high", label: "높음" }
 ];
 
-const exerciseCandidates: Record<BodyPart, string[]> = {
-  chest: ["푸시업", "벤치프레스", "덤벨 프레스"],
-  back: ["랫 풀다운", "바벨 로우", "시티드 로우"],
-  legs: ["스쿼트", "런지", "레그 프레스"],
-  core: ["플랭크", "데드버그", "행잉 레그레이즈"],
-  shoulders: ["숄더 프레스", "레터럴 레이즈", "리어 델트 플라이"],
-  arms: ["바벨 컬", "트라이셉스 푸시다운", "해머 컬"],
-  full_body: ["버피", "쓰러스터", "클린 앤 프레스"],
-  cardio: ["런닝", "사이클", "줄넘기"]
-};
-
-const storageKeys = {
-  session: "routinemate.local.session.v1",
-  meals: "routinemate.local.meals.v1",
-  workouts: "routinemate.local.workouts.v1",
-  goals: "routinemate.local.goals.v1",
-  metrics: "routinemate.local.metrics.v1"
-} as const;
-
 const recentSearchLimit = 14;
 
 function todayYmd(): string {
@@ -134,75 +117,40 @@ function ymdOffset(days: number): string {
   return `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function createId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function parseInteger(value: string): number | undefined {
+function parseNumber(value: string): number | undefined {
   if (value.trim().length === 0) {
     return undefined;
   }
-  const parsed = Number.parseInt(value, 10);
+  const parsed = Number(value);
   if (Number.isNaN(parsed)) {
     return undefined;
   }
   return parsed;
 }
 
-function parseDecimal(value: string): number | undefined {
-  if (value.trim().length === 0) {
-    return undefined;
-  }
-  const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed)) {
-    return undefined;
-  }
-  return parsed;
+async function parseErrorMessage(response: Response, fallback: string): Promise<string> {
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: { message?: string } }
+    | null;
+  return payload?.error?.message ?? fallback;
 }
 
 function formatPercent(value: number): string {
   return `${Math.round(value)}%`;
 }
 
-function readJson<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-  const raw = window.localStorage.getItem(key);
-  if (!raw) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson<T>(key: string, value: T): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(key, JSON.stringify(value));
-}
-
 export default function HomePage() {
+  const [session, setSession] = useState<SessionPayload | null>(null);
   const [range, setRange] = useState<RangeKey>("7d");
-  const [session, setSession] = useState<LocalSession | null>(null);
-
-  const [allMeals, setAllMeals] = useState<MealLog[]>([]);
-  const [allWorkouts, setAllWorkouts] = useState<WorkoutLog[]>([]);
-  const [allGoals, setAllGoals] = useState<Goal[]>([]);
-  const [allMetrics] = useState<BodyMetric[]>([]);
+  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
+  const [goal, setGoal] = useState<Goal | null>(null);
+  const [workoutSuggestions, setWorkoutSuggestions] = useState<WorkoutSuggestion[]>([]);
 
   const [sessionMessage, setSessionMessage] = useState<Message | null>(null);
   const [goalMessage, setGoalMessage] = useState<Message | null>(null);
   const [mealMessage, setMealMessage] = useState<Message | null>(null);
   const [workoutMessage, setWorkoutMessage] = useState<Message | null>(null);
+  const [metricMessage, setMetricMessage] = useState<Message | null>(null);
 
   const [goalForm, setGoalForm] = useState<GoalForm>({
     weeklyRoutineTarget: "4",
@@ -210,12 +158,14 @@ export default function HomePage() {
     targetWeightKg: "",
     targetBodyFat: ""
   });
+
   const [mealForm, setMealForm] = useState<MealForm>({
     date: todayYmd(),
     mealType: "lunch",
     foodLabel: "",
     portionSize: "medium"
   });
+
   const [workoutForm, setWorkoutForm] = useState<WorkoutForm>({
     date: todayYmd(),
     bodyPart: "full_body",
@@ -226,104 +176,281 @@ export default function HomePage() {
     durationMinutes: "30"
   });
 
-  useEffect(() => {
-    const restoredSession = readJson<LocalSession | null>(storageKeys.session, null);
-    const restoredMeals = readJson<MealLog[]>(storageKeys.meals, []);
-    const restoredWorkouts = readJson<WorkoutLog[]>(storageKeys.workouts, []);
-    const restoredGoals = readJson<Goal[]>(storageKeys.goals, []);
-    const restoredMetrics = readJson<BodyMetric[]>(storageKeys.metrics, []);
+  const [metricForm, setMetricForm] = useState<BodyMetricForm>({
+    date: todayYmd(),
+    weightKg: "",
+    bodyFatPct: ""
+  });
 
-    setSession(restoredSession);
-    setAllMeals(restoredMeals);
-    setAllWorkouts(restoredWorkouts);
-    setAllGoals(restoredGoals);
-    if (restoredMetrics.length > 0) {
-      // 체성분 로컬 저장 확장을 대비해 키를 미리 유지한다.
-      writeJson(storageKeys.metrics, restoredMetrics);
-    }
-  }, []);
-
-  const userMeals = useMemo(() => {
-    if (!session) {
-      return [];
-    }
-    return allMeals.filter((item) => item.userId === session.userId);
-  }, [allMeals, session]);
-
-  const userWorkouts = useMemo(() => {
-    if (!session) {
-      return [];
-    }
-    return allWorkouts.filter((item) => item.userId === session.userId);
-  }, [allWorkouts, session]);
-
-  const userGoals = useMemo(() => {
-    if (!session) {
-      return [];
-    }
-    return allGoals.filter((item) => item.userId === session.userId);
-  }, [allGoals, session]);
-
-  const currentGoal = useMemo(() => {
-    const sorted = [...userGoals].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    return sorted[0] ?? null;
-  }, [userGoals]);
-
-  useEffect(() => {
-    if (!currentGoal) {
+  async function fetchDashboard(currentSessionId: string, currentRange: RangeKey): Promise<void> {
+    const response = await fetch(
+      `/api/v1/dashboard?sessionId=${encodeURIComponent(currentSessionId)}&range=${encodeURIComponent(currentRange)}`
+    );
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "대시보드 조회에 실패했습니다.");
+      setSessionMessage({ type: "error", text: message });
       return;
     }
-    setGoalForm({
-      weeklyRoutineTarget: String(currentGoal.weeklyRoutineTarget),
-      dDay: currentGoal.dDay ?? "",
-      targetWeightKg: currentGoal.targetWeightKg?.toString() ?? "",
-      targetBodyFat: currentGoal.targetBodyFat?.toString() ?? ""
-    });
-  }, [currentGoal?.id, currentGoal?.createdAt]);
-
-  const dashboard = useMemo(() => {
-    if (!session) {
-      return null;
-    }
-    return aggregateDashboard({
-      range,
-      meals: userMeals,
-      workouts: userWorkouts,
-      bodyMetrics: allMetrics.filter((item) => item.userId === session.userId),
-      goals: userGoals,
-      now: new Date()
-    });
-  }, [allMetrics, range, session, userGoals, userMeals, userWorkouts]);
-
-  const exerciseSuggestions = useMemo(() => {
-    return exerciseCandidates[workoutForm.bodyPart];
-  }, [workoutForm.bodyPart]);
-
-  function createGuestSession() {
-    const nextSession: LocalSession = {
-      sessionId: createId("sess"),
-      userId: createId("user"),
-      createdAt: nowIso()
-    };
-    writeJson(storageKeys.session, nextSession);
-    setSession(nextSession);
-    setSessionMessage({ type: "success", text: "게스트 세션이 시작되었습니다. 기록은 브라우저에 저장됩니다." });
-    setGoalMessage(null);
-    setMealMessage(null);
-    setWorkoutMessage(null);
-    setMealForm((prev) => ({ ...prev, date: todayYmd(), foodLabel: "" }));
-    setWorkoutForm((prev) => ({ ...prev, date: todayYmd(), exerciseName: "" }));
+    const payload = (await response.json()) as { data?: DashboardSummary };
+    setDashboard(payload.data ?? null);
   }
 
-  function copyMealFromDate(date: string, label: string) {
+  async function fetchGoal(currentSessionId: string): Promise<void> {
+    const response = await fetch(`/api/v1/goals?sessionId=${encodeURIComponent(currentSessionId)}`);
+    if (!response.ok) {
+      return;
+    }
+    const payload = (await response.json()) as { data?: { goal?: Goal | null } };
+    const currentGoal = payload.data?.goal ?? null;
+    setGoal(currentGoal);
+    if (currentGoal) {
+      setGoalForm({
+        weeklyRoutineTarget: String(currentGoal.weeklyRoutineTarget),
+        dDay: currentGoal.dDay ?? "",
+        targetWeightKg: currentGoal.targetWeightKg?.toString() ?? "",
+        targetBodyFat: currentGoal.targetBodyFat?.toString() ?? ""
+      });
+    }
+  }
+
+  async function fetchWorkoutSuggestions(form: WorkoutForm): Promise<void> {
+    const response = await fetch(
+      `/api/v1/workout-suggestions?bodyPart=${encodeURIComponent(form.bodyPart)}&purpose=${encodeURIComponent(form.purpose)}&tool=${encodeURIComponent(form.tool)}`
+    );
+    if (!response.ok) {
+      return;
+    }
+    const payload = (await response.json()) as {
+      data?: { suggestions?: WorkoutSuggestion[] };
+    };
+    setWorkoutSuggestions(payload.data?.suggestions ?? []);
+  }
+
+  async function restoreSession(): Promise<void> {
+    const response = await fetch("/api/v1/auth/guest");
+    if (!response.ok) {
+      return;
+    }
+    const payload = (await response.json()) as { data?: SessionPayload };
+    if (!payload.data) {
+      return;
+    }
+    setSession(payload.data);
+    await fetchGoal(payload.data.sessionId);
+    await fetchDashboard(payload.data.sessionId, range);
+  }
+
+  useEffect(() => {
+    void restoreSession();
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    void fetchDashboard(session.sessionId, range);
+  }, [range, session?.sessionId]);
+
+  useEffect(() => {
+    void fetchWorkoutSuggestions(workoutForm);
+  }, [workoutForm.bodyPart, workoutForm.purpose, workoutForm.tool]);
+
+  async function createGuestSession(): Promise<void> {
+    const response = await fetch("/api/v1/auth/guest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "게스트 세션 생성에 실패했습니다.");
+      setSessionMessage({ type: "error", text: message });
+      return;
+    }
+    const payload = (await response.json()) as { data?: SessionPayload };
+    if (!payload.data) {
+      setSessionMessage({ type: "error", text: "세션 생성 응답이 비정상입니다." });
+      return;
+    }
+    setSession(payload.data);
+    setSessionMessage({ type: "success", text: "게스트 세션이 시작되었습니다." });
+    await fetchGoal(payload.data.sessionId);
+    await fetchDashboard(payload.data.sessionId, range);
+  }
+
+  async function saveGoal(): Promise<void> {
+    if (!session) {
+      setGoalMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+    const weeklyRoutineTarget = parseNumber(goalForm.weeklyRoutineTarget);
+    if (!weeklyRoutineTarget || weeklyRoutineTarget < 1 || weeklyRoutineTarget > 21) {
+      setGoalMessage({ type: "error", text: "주간 루틴 목표는 1~21 사이여야 합니다." });
+      return;
+    }
+    const body: Record<string, unknown> = {
+      sessionId: session.sessionId,
+      weeklyRoutineTarget: Math.trunc(weeklyRoutineTarget)
+    };
+    const targetWeightKg = parseNumber(goalForm.targetWeightKg);
+    if (targetWeightKg !== undefined) {
+      body.targetWeightKg = targetWeightKg;
+    }
+    const targetBodyFat = parseNumber(goalForm.targetBodyFat);
+    if (targetBodyFat !== undefined) {
+      body.targetBodyFat = targetBodyFat;
+    }
+    if (goalForm.dDay.trim()) {
+      body.dDay = goalForm.dDay.trim();
+    }
+
+    const response = await fetch("/api/v1/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "목표 저장에 실패했습니다.");
+      setGoalMessage({ type: "error", text: message });
+      return;
+    }
+
+    const payload = (await response.json()) as { data?: Goal };
+    if (payload.data) {
+      setGoal(payload.data);
+    }
+    setGoalMessage({ type: "success", text: "목표를 저장했습니다." });
+    await fetchDashboard(session.sessionId, range);
+  }
+
+  async function saveMealLog(): Promise<void> {
     if (!session) {
       setMealMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
-    const byDate = userMeals
-      .filter((item) => item.date.slice(0, 10) === date)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    const latest = byDate[0];
+    if (!mealForm.foodLabel.trim()) {
+      setMealMessage({ type: "error", text: "음식명을 입력해 주세요." });
+      return;
+    }
+
+    const response = await fetch("/api/v1/meal-logs/quick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: mealForm.date,
+        mealType: mealForm.mealType,
+        foodLabel: mealForm.foodLabel.trim(),
+        portionSize: mealForm.portionSize
+      })
+    });
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "식단 저장에 실패했습니다.");
+      setMealMessage({ type: "error", text: message });
+      return;
+    }
+
+    setMealForm((prev) => ({ ...prev, foodLabel: "" }));
+    setMealMessage({ type: "success", text: "식단을 저장했습니다." });
+    await fetchDashboard(session.sessionId, range);
+  }
+
+  async function saveWorkoutLog(): Promise<void> {
+    if (!session) {
+      setWorkoutMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+    const durationMinutes = parseNumber(workoutForm.durationMinutes);
+    if (!durationMinutes || durationMinutes < 1 || durationMinutes > 300) {
+      setWorkoutMessage({ type: "error", text: "운동 시간은 1~300분으로 입력해 주세요." });
+      return;
+    }
+
+    const exerciseName = workoutForm.exerciseName.trim() || workoutSuggestions[0]?.exerciseName || "기본 운동";
+
+    const response = await fetch("/api/v1/workout-logs/quick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: workoutForm.date,
+        bodyPart: workoutForm.bodyPart,
+        purpose: workoutForm.purpose,
+        tool: workoutForm.tool,
+        exerciseName,
+        intensity: workoutForm.intensity,
+        durationMinutes: Math.trunc(durationMinutes)
+      })
+    });
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "운동 저장에 실패했습니다.");
+      setWorkoutMessage({ type: "error", text: message });
+      return;
+    }
+
+    setWorkoutForm((prev) => ({
+      ...prev,
+      exerciseName: ""
+    }));
+    setWorkoutMessage({ type: "success", text: `${exerciseName} 운동을 저장했습니다.` });
+    await fetchDashboard(session.sessionId, range);
+  }
+
+  async function saveBodyMetric(): Promise<void> {
+    if (!session) {
+      setMetricMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+    const weightKg = parseNumber(metricForm.weightKg);
+    const bodyFatPct = parseNumber(metricForm.bodyFatPct);
+    if (weightKg === undefined && bodyFatPct === undefined) {
+      setMetricMessage({ type: "error", text: "체중 또는 체지방 중 하나는 입력해 주세요." });
+      return;
+    }
+
+    const response = await fetch("/api/v1/body-metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: metricForm.date,
+        ...(weightKg !== undefined ? { weightKg } : {}),
+        ...(bodyFatPct !== undefined ? { bodyFatPct } : {})
+      })
+    });
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, "체성분 저장에 실패했습니다.");
+      setMetricMessage({ type: "error", text: message });
+      return;
+    }
+
+    setMetricMessage({ type: "success", text: "체성분 기록을 저장했습니다." });
+    await fetchDashboard(session.sessionId, range);
+  }
+
+  async function copyMealFromDate(date: string, label: string): Promise<void> {
+    if (!session) {
+      setMealMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+    const response = await fetch(
+      `/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`
+    );
+    if (!response.ok) {
+      const message = await parseErrorMessage(response, `${label} 식단 기록을 불러오지 못했습니다.`);
+      setMealMessage({ type: "error", text: message });
+      return;
+    }
+    const payload = (await response.json()) as {
+      data?: {
+        mealLogs?: Array<{
+          date: string;
+          mealType: MealType;
+          foodLabel: string;
+          portionSize: PortionSize;
+        }>;
+      };
+    };
+    const latest = payload.data?.mealLogs?.[0];
     if (!latest) {
       setMealMessage({ type: "error", text: `${label} 기록이 없습니다.` });
       return;
@@ -334,20 +461,35 @@ export default function HomePage() {
       foodLabel: latest.foodLabel,
       portionSize: latest.portionSize
     });
-    setMealMessage({ type: "success", text: `${label} 기록을 폼에 복사했습니다.` });
+    setMealMessage({ type: "success", text: `${label} 식단을 복사했습니다.` });
   }
 
-  function copyMostRecentMeal() {
+  async function copyMostRecentMeal(): Promise<void> {
     if (!session) {
       setMealMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
     for (let i = 1; i <= recentSearchLimit; i++) {
       const date = ymdOffset(-i);
-      const byDate = userMeals
-        .filter((item) => item.date.slice(0, 10) === date)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-      const latest = byDate[0];
+      // eslint-disable-next-line no-await-in-loop
+      const response = await fetch(
+        `/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`
+      );
+      if (!response.ok) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const payload = (await response.json()) as {
+        data?: {
+          mealLogs?: Array<{
+            date: string;
+            mealType: MealType;
+            foodLabel: string;
+            portionSize: PortionSize;
+          }>;
+        };
+      };
+      const latest = payload.data?.mealLogs?.[0];
       if (latest) {
         setMealForm({
           date,
@@ -362,138 +504,13 @@ export default function HomePage() {
     setMealMessage({ type: "error", text: `${recentSearchLimit}일 내 복사할 식단이 없습니다.` });
   }
 
-  function saveGoal() {
-    if (!session) {
-      setGoalMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
-      return;
-    }
-
-    const weeklyRoutineTarget = parseInteger(goalForm.weeklyRoutineTarget);
-    if (weeklyRoutineTarget === undefined || weeklyRoutineTarget < 1 || weeklyRoutineTarget > 21) {
-      setGoalMessage({ type: "error", text: "주간 루틴 목표는 1~21회로 입력해 주세요." });
-      return;
-    }
-    const targetWeightKg = parseDecimal(goalForm.targetWeightKg);
-    if (targetWeightKg !== undefined && (targetWeightKg <= 0 || targetWeightKg > 400)) {
-      setGoalMessage({ type: "error", text: "목표 체중은 0초과 400 이하로 입력해 주세요." });
-      return;
-    }
-    const targetBodyFat = parseDecimal(goalForm.targetBodyFat);
-    if (targetBodyFat !== undefined && (targetBodyFat < 1 || targetBodyFat > 70)) {
-      setGoalMessage({ type: "error", text: "목표 체지방은 1~70 사이로 입력해 주세요." });
-      return;
-    }
-    if (goalForm.dDay.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(goalForm.dDay.trim())) {
-      setGoalMessage({ type: "error", text: "D-day는 YYYY-MM-DD 형식으로 입력해 주세요." });
-      return;
-    }
-
-    const base: Goal = {
-      id: currentGoal?.id ?? createId("goal"),
-      userId: session.userId,
-      weeklyRoutineTarget,
-      createdAt: currentGoal?.createdAt ?? nowIso()
-    };
-    if (goalForm.dDay.trim()) {
-      base.dDay = goalForm.dDay.trim();
-    }
-    if (targetWeightKg !== undefined) {
-      base.targetWeightKg = targetWeightKg;
-    }
-    if (targetBodyFat !== undefined) {
-      base.targetBodyFat = targetBodyFat;
-    }
-
-    setAllGoals((prev) => {
-      const index = prev.findIndex((item) => item.userId === session.userId);
-      const next = [...prev];
-      if (index >= 0) {
-        next[index] = base;
-      } else {
-        next.push(base);
-      }
-      writeJson(storageKeys.goals, next);
-      return next;
-    });
-    setGoalMessage({ type: "success", text: "목표를 저장했습니다." });
-  }
-
-  function saveMealLog() {
-    if (!session) {
-      setMealMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
-      return;
-    }
-    const foodLabel = mealForm.foodLabel.trim();
-    if (!foodLabel) {
-      setMealMessage({ type: "error", text: "음식명을 입력해 주세요." });
-      return;
-    }
-    const mealLog: MealLog = {
-      id: createId("meal"),
-      userId: session.userId,
-      date: mealForm.date,
-      mealType: mealForm.mealType,
-      foodLabel,
-      portionSize: mealForm.portionSize,
-      createdAt: nowIso()
-    };
-    setAllMeals((prev) => {
-      const next = [mealLog, ...prev];
-      writeJson(storageKeys.meals, next);
-      return next;
-    });
-    setMealForm((prev) => ({ ...prev, foodLabel: "" }));
-    setMealMessage({ type: "success", text: "식단을 저장했습니다." });
-  }
-
-  function saveWorkoutLog() {
-    if (!session) {
-      setWorkoutMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
-      return;
-    }
-    const durationMinutes = parseInteger(workoutForm.durationMinutes);
-    if (durationMinutes === undefined || durationMinutes < 1 || durationMinutes > 300) {
-      setWorkoutMessage({ type: "error", text: "운동 시간은 1~300분 범위로 입력해 주세요." });
-      return;
-    }
-
-    const fallbackExercise = exerciseSuggestions[0] ?? "기본 운동";
-    const exerciseName = workoutForm.exerciseName.trim() || fallbackExercise;
-
-    const workoutLog: WorkoutLog = {
-      id: createId("workout"),
-      userId: session.userId,
-      date: workoutForm.date,
-      bodyPart: workoutForm.bodyPart,
-      purpose: workoutForm.purpose,
-      tool: workoutForm.tool,
-      exerciseName,
-      durationMinutes,
-      intensity: workoutForm.intensity,
-      createdAt: nowIso()
-    };
-
-    setAllWorkouts((prev) => {
-      const next = [workoutLog, ...prev];
-      writeJson(storageKeys.workouts, next);
-      return next;
-    });
-
-    setWorkoutForm((prev) => ({
-      ...prev,
-      exerciseName: "",
-      durationMinutes: prev.durationMinutes || "30"
-    }));
-    setWorkoutMessage({ type: "success", text: `${exerciseName} 운동을 저장했습니다.` });
-  }
-
   const goalProgress = dashboard?.goals?.[0];
-  const adherenceLabel = dashboard ? formatPercent(dashboard.adherenceRate) : "--";
-  const mealSummary = dashboard ? `${dashboard.totalMeals}건` : "--";
-  const workoutSummary = dashboard ? `${dashboard.totalWorkouts}건` : "--";
-  const statusLabel = goalProgress
-    ? `${goalProgress.completedRoutineCount}회 완료 / 주간 목표 ${goalProgress.weeklyRoutineTarget}회`
-    : "목표가 아직 없습니다.";
+  const statusLabel = useMemo(() => {
+    if (!goalProgress) {
+      return "목표가 아직 없습니다.";
+    }
+    return `${goalProgress.completedRoutineCount}회 완료 / 주간 목표 ${goalProgress.weeklyRoutineTarget}회`;
+  }, [goalProgress]);
 
   return (
     <main className="layout">
@@ -501,10 +518,10 @@ export default function HomePage() {
         <div>
           <p className="eyebrow">RoutineMate MVP</p>
           <h1>루틴 메이트로 빠르게 기록하고, 가독성 있게 복기한다.</h1>
-          <p className="subtext">배포 환경에서도 끊기지 않도록 브라우저 로컬 저장으로 즉시 기록합니다.</p>
+          <p className="subtext">Notion DB 기반으로 식단/운동/체성분/목표를 서버에서 일관되게 관리합니다.</p>
         </div>
         <div className="actions">
-          <button type="button" className="button button-primary button-reset" onClick={createGuestSession}>
+          <button type="button" className="button button-primary button-reset" onClick={() => void createGuestSession()}>
             게스트 세션 시작
           </button>
           <button
@@ -544,15 +561,15 @@ export default function HomePage() {
         <div className="kpi-grid">
           <article className="kpi-card">
             <h2>체크인율</h2>
-            <p>{adherenceLabel}</p>
+            <p>{dashboard ? formatPercent(dashboard.adherenceRate) : "--"}</p>
           </article>
           <article className="kpi-card">
             <h2>식단 로그</h2>
-            <p>{mealSummary}</p>
+            <p>{dashboard ? `${dashboard.totalMeals}건` : "--"}</p>
           </article>
           <article className="kpi-card">
             <h2>운동 로그</h2>
-            <p>{workoutSummary}</p>
+            <p>{dashboard ? `${dashboard.totalWorkouts}건` : "--"}</p>
           </article>
           <article className="kpi-card">
             <h2>목표 달성률</h2>
@@ -565,12 +582,11 @@ export default function HomePage() {
       <section className="split-grid">
         <article className="card">
           <h2>목표 설정</h2>
-          <p className="hint">주간 루틴, 체중, 체지방 목표를 한 번에 저장합니다.</p>
           <form
             className="form-grid"
             onSubmit={(event) => {
               event.preventDefault();
-              saveGoal();
+              void saveGoal();
             }}
           >
             <label className="field">
@@ -581,7 +597,6 @@ export default function HomePage() {
                 max={21}
                 value={goalForm.weeklyRoutineTarget}
                 onChange={(event) => setGoalForm((prev) => ({ ...prev, weeklyRoutineTarget: event.target.value }))}
-                required
               />
             </label>
             <label className="field">
@@ -600,7 +615,6 @@ export default function HomePage() {
                 max={400}
                 value={goalForm.targetWeightKg}
                 onChange={(event) => setGoalForm((prev) => ({ ...prev, targetWeightKg: event.target.value }))}
-                placeholder="예: 68"
               />
             </label>
             <label className="field">
@@ -611,7 +625,6 @@ export default function HomePage() {
                 max={70}
                 value={goalForm.targetBodyFat}
                 onChange={(event) => setGoalForm((prev) => ({ ...prev, targetBodyFat: event.target.value }))}
-                placeholder="예: 19"
               />
             </label>
             <button type="submit" className="button button-primary button-reset full-span">
@@ -619,16 +632,23 @@ export default function HomePage() {
             </button>
           </form>
           {goalMessage ? <p className={`status status-${goalMessage.type}`}>{goalMessage.text}</p> : null}
+          {goal ? (
+            <div className="goal-summary">
+              <p className="hint">
+                현재 목표: 주 {goal.weeklyRoutineTarget}회 / 체중 {goal.targetWeightKg ?? "미설정"}kg / 체지방{" "}
+                {goal.targetBodyFat ?? "미설정"}%
+              </p>
+            </div>
+          ) : null}
         </article>
 
         <article className="card">
           <h2>식단 Quick Log</h2>
-          <p className="hint">어제/최근 기록을 바로 복사해서 빠르게 저장할 수 있습니다.</p>
           <div className="inline-actions">
-            <button type="button" className="button" disabled={!session} onClick={() => copyMealFromDate(ymdOffset(-1), "어제")}>
+            <button type="button" className="button" disabled={!session} onClick={() => void copyMealFromDate(ymdOffset(-1), "어제")}>
               어제 기록 복사
             </button>
-            <button type="button" className="button" disabled={!session} onClick={copyMostRecentMeal}>
+            <button type="button" className="button" disabled={!session} onClick={() => void copyMostRecentMeal()}>
               최근 기록 복사
             </button>
           </div>
@@ -636,7 +656,7 @@ export default function HomePage() {
             className="form-grid"
             onSubmit={(event) => {
               event.preventDefault();
-              saveMealLog();
+              void saveMealLog();
             }}
           >
             <label className="field">
@@ -666,7 +686,6 @@ export default function HomePage() {
                 type="text"
                 value={mealForm.foodLabel}
                 onChange={(event) => setMealForm((prev) => ({ ...prev, foodLabel: event.target.value }))}
-                placeholder="예: 닭가슴살 샐러드"
               />
             </label>
             <label className="field">
@@ -690,116 +709,164 @@ export default function HomePage() {
         </article>
       </section>
 
-      <section className="card">
-        <h2>운동 Quick Log</h2>
-        <p className="hint">운동명이 헷갈리면 부위/목적/도구를 먼저 고르고 추천 운동을 눌러 바로 저장하세요.</p>
-        <div className="recommend-row">
-          {exerciseSuggestions.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className="recommend-chip"
-              onClick={() => setWorkoutForm((prev) => ({ ...prev, exerciseName: name }))}
-            >
-              {name}
+      <section className="split-grid">
+        <article className="card">
+          <h2>운동 Quick Log</h2>
+          <p className="hint">운동명이 헷갈리면 부위/목적/도구 조합을 먼저 선택하세요.</p>
+          <div className="recommend-row">
+            {workoutSuggestions.map((item) => (
+              <button
+                key={`${item.bodyPart}-${item.exerciseName}`}
+                type="button"
+                className="recommend-chip"
+                onClick={() => setWorkoutForm((prev) => ({ ...prev, exerciseName: item.exerciseName }))}
+              >
+                {item.exerciseName}
+              </button>
+            ))}
+          </div>
+          <form
+            className="form-grid"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveWorkoutLog();
+            }}
+          >
+            <label className="field">
+              <span>날짜</span>
+              <input
+                type="date"
+                value={workoutForm.date}
+                onChange={(event) => setWorkoutForm((prev) => ({ ...prev, date: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>부위</span>
+              <select
+                value={workoutForm.bodyPart}
+                onChange={(event) => setWorkoutForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))}
+              >
+                {bodyPartOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>목적</span>
+              <select
+                value={workoutForm.purpose}
+                onChange={(event) =>
+                  setWorkoutForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
+                }
+              >
+                {purposeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>도구</span>
+              <select
+                value={workoutForm.tool}
+                onChange={(event) => setWorkoutForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))}
+              >
+                {toolOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>운동명</span>
+              <input
+                type="text"
+                value={workoutForm.exerciseName}
+                onChange={(event) => setWorkoutForm((prev) => ({ ...prev, exerciseName: event.target.value }))}
+                placeholder="모르면 추천 칩 선택"
+              />
+            </label>
+            <label className="field">
+              <span>강도</span>
+              <select
+                value={workoutForm.intensity}
+                onChange={(event) =>
+                  setWorkoutForm((prev) => ({ ...prev, intensity: event.target.value as WorkoutIntensity }))
+                }
+              >
+                {intensityOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>시간(분)</span>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={workoutForm.durationMinutes}
+                onChange={(event) => setWorkoutForm((prev) => ({ ...prev, durationMinutes: event.target.value }))}
+              />
+            </label>
+            <button type="submit" className="button button-primary button-reset full-span">
+              운동 저장
             </button>
-          ))}
-        </div>
-        <form
-          className="form-grid"
-          onSubmit={(event) => {
-            event.preventDefault();
-            saveWorkoutLog();
-          }}
-        >
-          <label className="field">
-            <span>날짜</span>
-            <input
-              type="date"
-              value={workoutForm.date}
-              onChange={(event) => setWorkoutForm((prev) => ({ ...prev, date: event.target.value }))}
-            />
-          </label>
-          <label className="field">
-            <span>운동 부위</span>
-            <select
-              value={workoutForm.bodyPart}
-              onChange={(event) => setWorkoutForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))}
-            >
-              {bodyPartOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>목적</span>
-            <select
-              value={workoutForm.purpose}
-              onChange={(event) =>
-                setWorkoutForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
-              }
-            >
-              {purposeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>도구</span>
-            <select
-              value={workoutForm.tool}
-              onChange={(event) => setWorkoutForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))}
-            >
-              {toolOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>운동명</span>
-            <input
-              type="text"
-              value={workoutForm.exerciseName}
-              onChange={(event) => setWorkoutForm((prev) => ({ ...prev, exerciseName: event.target.value }))}
-              placeholder="운동명을 모르면 위 추천 버튼 사용"
-            />
-          </label>
-          <label className="field">
-            <span>강도</span>
-            <select
-              value={workoutForm.intensity}
-              onChange={(event) =>
-                setWorkoutForm((prev) => ({ ...prev, intensity: event.target.value as WorkoutIntensity }))
-              }
-            >
-              {intensityOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>시간(분)</span>
-            <input
-              type="number"
-              min={1}
-              max={300}
-              value={workoutForm.durationMinutes}
-              onChange={(event) => setWorkoutForm((prev) => ({ ...prev, durationMinutes: event.target.value }))}
-            />
-          </label>
-          <button type="submit" className="button button-primary button-reset full-span">
-            운동 저장
-          </button>
-        </form>
-        {workoutMessage ? <p className={`status status-${workoutMessage.type}`}>{workoutMessage.text}</p> : null}
+          </form>
+          {workoutMessage ? <p className={`status status-${workoutMessage.type}`}>{workoutMessage.text}</p> : null}
+        </article>
+
+        <article className="card">
+          <h2>체중/체지방 기록</h2>
+          <form
+            className="form-grid"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveBodyMetric();
+            }}
+          >
+            <label className="field">
+              <span>날짜</span>
+              <input
+                type="date"
+                value={metricForm.date}
+                onChange={(event) => setMetricForm((prev) => ({ ...prev, date: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>체중(kg)</span>
+              <input
+                type="number"
+                min={1}
+                max={400}
+                value={metricForm.weightKg}
+                onChange={(event) => setMetricForm((prev) => ({ ...prev, weightKg: event.target.value }))}
+                placeholder="예: 72.4"
+              />
+            </label>
+            <label className="field">
+              <span>체지방(%)</span>
+              <input
+                type="number"
+                min={1}
+                max={70}
+                value={metricForm.bodyFatPct}
+                onChange={(event) => setMetricForm((prev) => ({ ...prev, bodyFatPct: event.target.value }))}
+                placeholder="예: 19.3"
+              />
+            </label>
+            <button type="submit" className="button button-primary button-reset full-span">
+              체성분 저장
+            </button>
+          </form>
+          {metricMessage ? <p className={`status status-${metricMessage.type}`}>{metricMessage.text}</p> : null}
+        </article>
       </section>
     </main>
   );

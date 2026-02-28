@@ -1,0 +1,130 @@
+# RoutineMate Notion DB Setup
+
+## 1) 사전 준비
+
+1. Notion에서 `Internal Integration` 생성
+- Integration 생성 후 `Internal Integration Token` 확보
+
+2. 아래 5개 데이터베이스 생성
+- `RoutineMate Sessions`
+- `RoutineMate Meals`
+- `RoutineMate Workouts`
+- `RoutineMate BodyMetrics`
+- `RoutineMate Goals`
+
+3. 각 데이터베이스를 Integration에 공유
+- DB 우측 상단 `...` -> `Connections` -> 생성한 Integration 연결
+
+4. DB ID 확보
+- DB URL에서 UUID 추출
+- 예시 URL: `https://www.notion.so/workspace/<db_id>?v=<view_id>`
+
+5. 환경변수 설정 (`.env`, Vercel Project Env 모두)
+- `NOTION_TOKEN=...`
+- `NOTION_DB_SESSIONS=...`
+- `NOTION_DB_MEALS=...`
+- `NOTION_DB_WORKOUTS=...`
+- `NOTION_DB_BODY_METRICS=...`
+- `NOTION_DB_GOALS=...`
+
+---
+
+## 2) 데이터베이스별 컬럼 스키마 (Notion 타입 준수)
+
+주의:
+- 컬럼명은 아래와 동일하게 생성해야 서버 매핑과 1:1로 동작함.
+- 각 DB는 Notion 제약상 `Title` 타입 1개가 반드시 필요함.
+
+## Sessions DB (`NOTION_DB_SESSIONS`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | `sessionId` 저장 |
+| `UserId` | `Rich text` | Y | 내부 사용자 식별자 |
+| `IsGuest` | `Checkbox` | Y | 게스트 여부 |
+| `Email` | `Email` | N | 업그레이드 후 이메일 |
+| `CreatedAt` | `Date` | Y | 세션 생성 시각 |
+| `UpgradedAt` | `Date` | N | 계정 업그레이드 시각 |
+
+## Meals DB (`NOTION_DB_MEALS`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 표시용 제목(예: `2026-02-28 샐러드`) |
+| `Id` | `Rich text` | Y | meal log id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `Date` | `Date` | Y | 기록 날짜 |
+| `MealType` | `Select` | Y | `breakfast`/`lunch`/`dinner`/`snack` |
+| `FoodLabel` | `Rich text` | Y | 음식명 |
+| `PortionSize` | `Select` | Y | `small`/`medium`/`large` |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+## Workouts DB (`NOTION_DB_WORKOUTS`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 표시용 제목 |
+| `Id` | `Rich text` | Y | workout log id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `Date` | `Date` | Y | 기록 날짜 |
+| `BodyPart` | `Select` | Y | `chest/back/legs/core/shoulders/arms/full_body/cardio` |
+| `Purpose` | `Select` | Y | `muscle_gain/fat_loss/endurance/mobility/recovery` |
+| `Tool` | `Select` | Y | `bodyweight/dumbbell/machine/barbell/kettlebell/mixed` |
+| `ExerciseName` | `Rich text` | Y | 운동명 |
+| `Intensity` | `Select` | Y | `low/medium/high` |
+| `Sets` | `Number` | N | 세트 |
+| `Reps` | `Number` | N | 반복 |
+| `WeightKg` | `Number` | N | 중량 |
+| `DurationMinutes` | `Number` | N | 운동 시간 |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+## BodyMetrics DB (`NOTION_DB_BODY_METRICS`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 표시용 제목 |
+| `Id` | `Rich text` | Y | body metric id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `Date` | `Date` | Y | 기록 날짜 |
+| `WeightKg` | `Number` | N | 체중 |
+| `BodyFatPct` | `Number` | N | 체지방률 |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+## Goals DB (`NOTION_DB_GOALS`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 고정값 `Goal` 사용 |
+| `Id` | `Rich text` | Y | goal id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `WeeklyRoutineTarget` | `Number` | Y | 주간 목표 횟수 |
+| `DDay` | `Date` | N | 목표 날짜 |
+| `TargetWeightKg` | `Number` | N | 목표 체중 |
+| `TargetBodyFat` | `Number` | N | 목표 체지방 |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+---
+
+## 3) Select 옵션 값 (정확히 동일)
+
+## Meals
+- `MealType`: `breakfast`, `lunch`, `dinner`, `snack`
+- `PortionSize`: `small`, `medium`, `large`
+
+## Workouts
+- `BodyPart`: `chest`, `back`, `legs`, `core`, `shoulders`, `arms`, `full_body`, `cardio`
+- `Purpose`: `muscle_gain`, `fat_loss`, `endurance`, `mobility`, `recovery`
+- `Tool`: `bodyweight`, `dumbbell`, `machine`, `barbell`, `kettlebell`, `mixed`
+- `Intensity`: `low`, `medium`, `high`
+
+---
+
+## 4) 배포 후 확인 체크리스트
+
+1. `게스트 세션 시작` 성공
+2. 목표 저장 성공
+3. 식단 저장 성공
+4. 운동 저장 성공
+5. 체중/체지방 저장 성공
+6. 새로고침 후 기록 유지(쿠키 기반 세션 + Notion 조회)
+

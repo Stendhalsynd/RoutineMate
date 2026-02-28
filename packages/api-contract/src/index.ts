@@ -99,6 +99,12 @@ export const dashboardQuerySchema = z.object({
   range: rangeSchema.default("7d")
 });
 
+export const workoutSuggestionQuerySchema = z.object({
+  bodyPart: z.enum(["chest", "back", "legs", "core", "shoulders", "arms", "full_body", "cardio"]),
+  purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
+  tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional()
+});
+
 export function formatZodIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => {
     const path = issue.path.length > 0 ? issue.path.join(".") : "body";
@@ -116,3 +122,4 @@ export type GoalQuery = z.infer<typeof goalQuerySchema>;
 export type CalendarDayQuery = z.infer<typeof calendarDayQuerySchema>;
 export type CalendarRangeQuery = z.infer<typeof calendarRangeQuerySchema>;
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>;
+export type WorkoutSuggestionQuery = z.infer<typeof workoutSuggestionQuerySchema>;

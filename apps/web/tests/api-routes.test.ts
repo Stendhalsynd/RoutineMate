@@ -6,8 +6,8 @@ import { GET as getDashboard } from "../app/api/v1/dashboard/route";
 import { POST as createMeal } from "../app/api/v1/meal-logs/quick/route";
 import { repo } from "../src/lib/repository";
 
-beforeEach(() => {
-  repo.clear();
+beforeEach(async () => {
+  await repo.clear();
 });
 
 test("POST /v1/auth/guest creates a guest session", async () => {
