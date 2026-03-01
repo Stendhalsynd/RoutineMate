@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { buildCalendarUiCells } from "@/lib/calendar-summary";
 import type {
   BodyPart,
   DashboardSummary,
@@ -505,6 +506,7 @@ export default function HomePage() {
   }
 
   const goalProgress = dashboard?.goals?.[0];
+  const calendarCells = useMemo(() => buildCalendarUiCells(dashboard?.daily ?? []), [dashboard?.daily]);
   const statusLabel = useMemo(() => {
     if (!goalProgress) {
       return "목표가 아직 없습니다.";
@@ -577,6 +579,36 @@ export default function HomePage() {
           </article>
         </div>
         <p className="hint">{statusLabel}</p>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>캘린더 요약</h2>
+          <p className="hint">M: 식단 / W: 운동 / B: 체성분</p>
+        </div>
+        {calendarCells.length === 0 ? (
+          <p className="hint">세션을 시작하면 최근 기간의 날짜별 기록 점수를 표시합니다.</p>
+        ) : (
+          <div className="calendar-grid">
+            {calendarCells.map((cell) => (
+              <article key={cell.date} className={`calendar-cell calendar-${cell.color}`}>
+                <p className="calendar-date">{cell.dayLabel}</p>
+                <p className="calendar-score">{cell.overallScore}</p>
+                <div className="calendar-badges">
+                  {cell.badges.length > 0 ? (
+                    cell.badges.map((badge) => (
+                      <span key={`${cell.date}-${badge}`} className="calendar-badge">
+                        {badge}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="calendar-empty">No Log</span>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="split-grid">
