@@ -165,17 +165,40 @@ test("bootstrapResponseSchema accepts nullable session payload", () => {
 });
 
 test("google auth schemas accept web/android payloads", () => {
-  const upgrade = googleUpgradeRequestSchema.safeParse({
+  const upgradeByToken = googleUpgradeRequestSchema.safeParse({
     sessionId: "sess-1",
     idToken: "token",
     platform: "web"
   });
-  const session = googleSessionRequestSchema.safeParse({
+  const sessionByToken = googleSessionRequestSchema.safeParse({
     idToken: "token",
     platform: "android"
   });
-  assert.equal(upgrade.success, true);
-  assert.equal(session.success, true);
+  const upgradeByCode = googleUpgradeRequestSchema.safeParse({
+    sessionId: "sess-1",
+    authorizationCode: "auth-code",
+    codeVerifier: "code-verifier",
+    redirectUri: "routinemate://oauth",
+    platform: "android",
+    mode: "auth_code_pkce"
+  });
+  const sessionByCode = googleSessionRequestSchema.safeParse({
+    authorizationCode: "auth-code",
+    codeVerifier: "code-verifier",
+    redirectUri: "routinemate://oauth",
+    platform: "android"
+  });
+  assert.equal(upgradeByToken.success, true);
+  assert.equal(sessionByToken.success, true);
+  assert.equal(upgradeByCode.success, true);
+  assert.equal(sessionByCode.success, true);
+});
+
+test("google auth schemas reject payload when idToken/code pair is missing", () => {
+  const result = googleSessionRequestSchema.safeParse({
+    platform: "android"
+  });
+  assert.equal(result.success, false);
 });
 
 test("reminder schemas validate configuration and evaluation query", () => {

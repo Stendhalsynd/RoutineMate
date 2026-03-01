@@ -13,6 +13,7 @@ export type WorkspaceView = "dashboard" | "records" | "settings";
 export type UiRangeLabel = "day" | "week" | "month";
 export type ReminderChannel = "web_in_app" | "web_push" | "mobile_local";
 export type AuthProvider = "guest" | "google";
+export type GoogleAuthMode = "id_token" | "auth_code_pkce";
 
 export interface ScoringPolicy {
   dietWeight: number;
@@ -281,6 +282,15 @@ export interface GoogleProfile {
   email: string;
   name?: string;
   picture?: string;
+}
+
+export interface GoogleAuthExchangeRequest {
+  sessionId?: string;
+  authorizationCode: string;
+  codeVerifier: string;
+  redirectUri: string;
+  platform: "web" | "android";
+  mode?: GoogleAuthMode;
 }
 
 export interface WorkoutSuggestion {

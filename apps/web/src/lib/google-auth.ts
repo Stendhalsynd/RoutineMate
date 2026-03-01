@@ -26,6 +26,19 @@ function allowedAudiences(platform: GooglePlatform): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+function primaryAudience(platform: GooglePlatform): string {
+  const audiences = allowedAudiences(platform);
+  const audience = audiences[0];
+  if (!audience) {
+    const missingEnv =
+      platform === "web"
+        ? "GOOGLE_WEB_CLIENT_ID"
+        : "GOOGLE_ANDROID_CLIENT_ID (or EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID)";
+    throw new Error(`Google OAuth is not configured. Missing env: ${missingEnv}`);
+  }
+  return audience;
+}
+
 function parseTestToken(idToken: string): GoogleProfile | null {
   if (process.env.NODE_ENV === "production") {
     return null;
@@ -81,6 +94,52 @@ export async function verifyGoogleIdToken(idToken: string, platform: GooglePlatf
     email: payload.email,
     ...(payload.picture ? { picture: payload.picture } : {})
   };
+}
+
+type GoogleCodeExchangeInput = {
+  authorizationCode: string;
+  codeVerifier: string;
+  redirectUri: string;
+  platform: GooglePlatform;
+};
+
+export async function exchangeGoogleAuthorizationCode({
+  authorizationCode,
+  codeVerifier,
+  redirectUri,
+  platform
+}: GoogleCodeExchangeInput): Promise<string> {
+  const clientId = primaryAudience(platform);
+
+  const params = new URLSearchParams({
+    grant_type: "authorization_code",
+    code: authorizationCode,
+    code_verifier: codeVerifier,
+    redirect_uri: redirectUri,
+    client_id: clientId
+  });
+
+  const secret = process.env.GOOGLE_WEB_CLIENT_SECRET?.trim();
+  if (platform === "web" && secret) {
+    params.set("client_secret", secret);
+  }
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: params.toString(),
+    cache: "no-store"
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as { id_token?: string; error_description?: string };
+  if (!response.ok || !payload.id_token) {
+    const detail = payload.error_description?.trim();
+    throw new Error(detail ? `Google code 교환에 실패했습니다. (${detail})` : "Google code 교환에 실패했습니다.");
+  }
+
+  return payload.id_token;
 }
 
 export function getGoogleWebClientId(): string {

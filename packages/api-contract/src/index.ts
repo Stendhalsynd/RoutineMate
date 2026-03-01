@@ -24,6 +24,8 @@ export const isoDateSchema = z
   .refine((value) => isValidIsoDate(value), "Invalid calendar date");
 const nonEmptyString = z.string().trim().min(1);
 const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "Expected HH:MM");
+const googlePlatformSchema = z.enum(["web", "android"]);
+const googleAuthModeSchema = z.enum(["id_token", "auth_code_pkce"]);
 
 export const rangeSchema = z.enum(["7d", "30d", "90d"]);
 
@@ -36,16 +38,30 @@ export const authUpgradeRequestSchema = z.object({
   email: z.string().email()
 });
 
-export const googleUpgradeRequestSchema = z.object({
-  sessionId: nonEmptyString,
+const googleIdTokenRequestSchema = z.object({
   idToken: nonEmptyString,
-  platform: z.enum(["web", "android"])
+  platform: googlePlatformSchema,
+  mode: googleAuthModeSchema.optional()
 });
 
-export const googleSessionRequestSchema = z.object({
-  idToken: nonEmptyString,
-  platform: z.enum(["web", "android"])
+const googleAuthCodePkceRequestSchema = z.object({
+  authorizationCode: nonEmptyString,
+  codeVerifier: nonEmptyString,
+  redirectUri: nonEmptyString,
+  platform: googlePlatformSchema,
+  mode: googleAuthModeSchema.optional()
 });
+
+export const googleUpgradeRequestSchema = z.union([
+  z.object({
+    sessionId: nonEmptyString
+  }).and(googleIdTokenRequestSchema),
+  z.object({
+    sessionId: nonEmptyString
+  }).and(googleAuthCodePkceRequestSchema)
+]);
+
+export const googleSessionRequestSchema = z.union([googleIdTokenRequestSchema, googleAuthCodePkceRequestSchema]);
 
 export const quickMealLogInputSchema = z.object({
   sessionId: nonEmptyString,
@@ -336,6 +352,7 @@ export type AuthGuestRequest = z.infer<typeof authGuestRequestSchema>;
 export type AuthUpgradeRequest = z.infer<typeof authUpgradeRequestSchema>;
 export type GoogleUpgradeRequest = z.infer<typeof googleUpgradeRequestSchema>;
 export type GoogleSessionRequest = z.infer<typeof googleSessionRequestSchema>;
+export type GoogleAuthMode = z.infer<typeof googleAuthModeSchema>;
 export type QuickMealLogRequest = z.infer<typeof quickMealLogInputSchema>;
 export type MealCheckinRequest = z.infer<typeof mealCheckinInputSchema>;
 export type MealCheckinUpdateRequest = z.infer<typeof mealCheckinUpdateSchema>;

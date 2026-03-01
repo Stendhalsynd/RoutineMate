@@ -31,6 +31,9 @@ import { repo } from "../src/lib/repository";
 
 type SessionResponse = { data: { sessionId: string; userId: string } };
 
+process.env.GOOGLE_ANDROID_CLIENT_ID = process.env.GOOGLE_ANDROID_CLIENT_ID ?? "test-android-client-id";
+process.env.GOOGLE_WEB_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID ?? "test-web-client-id";
+
 async function makeSession(): Promise<SessionResponse["data"]> {
   const sessionResponse = await createGuest(
     new Request("http://localhost/api/v1/auth/guest", {
@@ -104,6 +107,73 @@ test("POST /v1/auth/upgrade/google upgrades session and POST /v1/auth/google/ses
   };
   assert.equal(restoredPayload.data.userId, session.userId);
   assert.equal(restoredPayload.data.authProvider, "google");
+});
+
+test("POST /v1/auth/upgrade/google accepts auth code + PKCE flow", async () => {
+  const session = await makeSession();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url.startsWith("https://oauth2.googleapis.com/token")) {
+      return new Response(
+        JSON.stringify({
+          id_token: "test:google-sub-2:user2@example.com"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const upgradedResponse = await upgradeGoogleSession(
+      new Request("http://localhost/api/v1/auth/upgrade/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: session.sessionId,
+          authorizationCode: "auth-code",
+          codeVerifier: "verifier",
+          redirectUri: "routinemate://oauth",
+          platform: "android"
+        })
+      })
+    );
+    assert.equal(upgradedResponse.status, 200);
+
+    const restoredResponse = await createGoogleSession(
+      new Request("http://localhost/api/v1/auth/google/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorizationCode: "auth-code",
+          codeVerifier: "verifier",
+          redirectUri: "routinemate://oauth",
+          platform: "android"
+        })
+      })
+    );
+
+    assert.equal(restoredResponse.status, 200);
+    const restoredPayload = (await restoredResponse.json()) as {
+      data: { userId: string; authProvider?: string };
+    };
+    assert.equal(restoredPayload.data.userId, session.userId);
+    assert.equal(restoredPayload.data.authProvider, "google");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("GET /v1/dashboard without sessionId returns 400", async () => {

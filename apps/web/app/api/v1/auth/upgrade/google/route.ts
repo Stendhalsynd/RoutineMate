@@ -1,6 +1,6 @@
 import { googleUpgradeRequestSchema } from "@routinemate/api-contract";
 import { badRequest, internalError, notFound, ok, zodIssues } from "@/lib/api-utils";
-import { verifyGoogleIdToken } from "@/lib/google-auth";
+import { exchangeGoogleAuthorizationCode, verifyGoogleIdToken } from "@/lib/google-auth";
 import { repo } from "@/lib/repository";
 import { resolveSessionId, setSessionCookie } from "@/lib/session-cookie";
 
@@ -11,6 +11,9 @@ export async function POST(request: Request) {
     const parsed = googleUpgradeRequestSchema.safeParse({
       sessionId,
       idToken: body.idToken,
+      authorizationCode: body.authorizationCode,
+      codeVerifier: body.codeVerifier,
+      redirectUri: body.redirectUri,
       platform: body.platform
     });
 
@@ -18,7 +21,16 @@ export async function POST(request: Request) {
       return badRequest("Invalid google upgrade request.", zodIssues(parsed.error));
     }
 
-    const profile = await verifyGoogleIdToken(parsed.data.idToken, parsed.data.platform);
+    const idToken =
+      "idToken" in parsed.data
+        ? parsed.data.idToken
+        : await exchangeGoogleAuthorizationCode({
+            authorizationCode: parsed.data.authorizationCode,
+            codeVerifier: parsed.data.codeVerifier,
+            redirectUri: parsed.data.redirectUri,
+            platform: parsed.data.platform
+          });
+    const profile = await verifyGoogleIdToken(idToken, parsed.data.platform);
     const upgraded = await repo.upgradeSessionWithGoogle(parsed.data.sessionId, profile);
     if (!upgraded) {
       return notFound("Session was not found.");

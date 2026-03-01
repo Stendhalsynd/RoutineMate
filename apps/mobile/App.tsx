@@ -144,6 +144,12 @@ WebBrowser.maybeCompleteAuthSession();
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://routinemate-kohl.vercel.app";
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "";
+const GOOGLE_ANDROID_REDIRECT_URI = AuthSession.makeRedirectUri({
+  native: "com.routinemate.app:/oauthredirect",
+  scheme: "routinemate",
+  path: "oauth",
+  preferLocalhost: false
+});
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -1128,19 +1134,13 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID가 필요합니다." });
         return;
       }
-      const redirectUri = AuthSession.makeRedirectUri({
-        scheme: "routinemate",
-        path: "oauth",
-        preferLocalhost: false
-      });
-      const nonce = String(Date.now());
       const request = new AuthSession.AuthRequest({
         clientId: GOOGLE_ANDROID_CLIENT_ID,
-        responseType: AuthSession.ResponseType.IdToken,
-        usePKCE: false,
+        responseType: AuthSession.ResponseType.Code,
+        usePKCE: true,
         scopes: ["openid", "email", "profile"],
-        redirectUri,
-        extraParams: { nonce, prompt: "select_account" }
+        redirectUri: GOOGLE_ANDROID_REDIRECT_URI,
+        extraParams: { prompt: "select_account" }
       });
 
       const authResult = (await request.promptAsync({
@@ -1155,7 +1155,7 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "Google 인증이 취소되었습니다." });
         return;
       }
-      if (authResult.type === "error" || !authResult.params?.id_token) {
+      if (authResult.type === "error" || !authResult.params?.code) {
         const detail = (authResult as { error?: { message?: string } | string; errorCode?: string | null }).error;
         const errorText = typeof detail === "string" ? detail : detail?.message;
         setMessage({
@@ -1164,13 +1164,20 @@ export default function App(): React.JSX.Element {
         });
         return;
       }
+      if (!request.codeVerifier) {
+        setMessage({ type: "error", text: "Google PKCE verifier를 생성하지 못했습니다." });
+        return;
+      }
 
       const payload = await apiFetch<Session>(session ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
         method: "POST",
         body: JSON.stringify({
           ...(session ? { sessionId: session.sessionId } : {}),
-          idToken: authResult.params.id_token,
-          platform: "android"
+          authorizationCode: authResult.params.code,
+          codeVerifier: request.codeVerifier,
+          redirectUri: GOOGLE_ANDROID_REDIRECT_URI,
+          platform: "android",
+          mode: "auth_code_pkce"
         })
       });
       setSession(payload);
