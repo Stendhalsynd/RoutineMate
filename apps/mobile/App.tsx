@@ -144,12 +144,9 @@ WebBrowser.maybeCompleteAuthSession();
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://routinemate-kohl.vercel.app";
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "";
-const GOOGLE_ANDROID_REDIRECT_URI = AuthSession.makeRedirectUri({
-  native: "com.routinemate.app:/oauthredirect",
-  scheme: "routinemate",
-  path: "oauth",
-  preferLocalhost: false
-});
+const APP_SCHEME = "routinemate";
+const GOOGLE_ANDROID_REDIRECT_URI =
+  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_REDIRECT_URI?.trim() || `${APP_SCHEME}://oauth`;
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -1134,6 +1131,12 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID가 필요합니다." });
         return;
       }
+      if (__DEV__) {
+        console.info("[GoogleOAuth] starting auth request", {
+          clientId: GOOGLE_ANDROID_CLIENT_ID,
+          redirectUri: GOOGLE_ANDROID_REDIRECT_URI
+        });
+      }
       const request = new AuthSession.AuthRequest({
         clientId: GOOGLE_ANDROID_CLIENT_ID,
         responseType: AuthSession.ResponseType.Code,
@@ -1158,9 +1161,26 @@ export default function App(): React.JSX.Element {
       if (authResult.type === "error" || !authResult.params?.code) {
         const detail = (authResult as { error?: { message?: string } | string; errorCode?: string | null }).error;
         const errorText = typeof detail === "string" ? detail : detail?.message;
+        const oauthError = authResult.params?.error;
+        const oauthErrorDescription = authResult.params?.error_description;
+        const invalidRequestHint =
+          oauthError === "invalid_request"
+            ? ` Google Console의 Android OAuth 클라이언트(package: com.routinemate.app, SHA-1) 및 redirect_uri(${GOOGLE_ANDROID_REDIRECT_URI}) 설정을 확인하세요.`
+            : "";
+        if (__DEV__) {
+          console.error("[GoogleOAuth] auth request failed", {
+            type: authResult.type,
+            errorCode: authResult.errorCode,
+            oauthError,
+            oauthErrorDescription,
+            redirectUri: GOOGLE_ANDROID_REDIRECT_URI
+          });
+        }
         setMessage({
           type: "error",
-          text: `Google 인증에 실패했습니다${errorText ? ` (${errorText})` : ""}${authResult.errorCode ? ` (${authResult.errorCode})` : ""}`
+          text: `Google 인증에 실패했습니다${errorText ? ` (${errorText})` : ""}${
+            authResult.errorCode ? ` (${authResult.errorCode})` : ""
+          }${oauthError ? ` (${oauthError})` : ""}${oauthErrorDescription ? ` (${oauthErrorDescription})` : ""}${invalidRequestHint}`
         });
         return;
       }

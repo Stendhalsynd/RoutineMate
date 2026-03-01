@@ -56,6 +56,7 @@ S4 리마인더 기능을 사용하려면 `NOTION_DB_REMINDER_SETTINGS`가 필�
 - `GOOGLE_ANDROID_CLIENT_ID=...`
 - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...`
 - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...`
+- `EXPO_PUBLIC_GOOGLE_ANDROID_REDIRECT_URI=routinemate://oauth` (선택, 기본값 동일)
 
 APK 릴리즈(S4-4) 참고:
 - 로컬 Gradle 빌드 전략을 사용하며, Android SDK/JDK가 필요합니다.
@@ -312,9 +313,10 @@ keytool -list -v -keystore /path/to/your-release.keystore -alias YOUR_ALIAS
 ```
 
 4. 리다이렉트 URI/스킴
-- 앱에서 사용하는 Android 리다이렉트 URI는 `com.routinemate.app:/oauthredirect` 입니다.
-- OAuth code 교환 시 `redirectUri`도 동일값으로 전달되어야 합니다(인증 요청/토큰 교환 일치 필수).
-- APK 재빌드 전 값 변경 시 AndroidManifest intent-filter에 해당 스킴이 존재하는지 확인합니다.
+- 기본 Android 리다이렉트 URI는 `routinemate://oauth` 입니다.
+- `EXPO_PUBLIC_GOOGLE_ANDROID_REDIRECT_URI`를 지정하면 해당 값으로 인증 요청/토큰 교환에 모두 사용합니다.
+- OAuth code 교환 시 `redirectUri`는 인증 요청의 `redirect_uri`와 반드시 동일해야 합니다.
+- `app.json`의 `expo.scheme`가 리다이렉트 URI 스킴과 일치하는지 확인합니다.
 
 5. OAuth 동의 화면
 - 앱이 "테스트" 상태면 로그인 시도 Google 계정을 테스트 사용자로 추가하세요.
