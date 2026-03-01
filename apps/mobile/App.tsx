@@ -1137,6 +1137,7 @@ export default function App(): React.JSX.Element {
       const request = new AuthSession.AuthRequest({
         clientId: GOOGLE_ANDROID_CLIENT_ID,
         responseType: AuthSession.ResponseType.IdToken,
+        usePKCE: false,
         scopes: ["openid", "email", "profile"],
         redirectUri,
         extraParams: { nonce, prompt: "select_account" }

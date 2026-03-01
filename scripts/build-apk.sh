@@ -193,8 +193,33 @@ path.write_text(text.replace(old, new, 1))
 PY
 }
 
+sync_android_launcher_icons() {
+  local icon_src="${MOBILE_DIR}/assets/icon.png"
+  if [[ ! -f "${icon_src}" ]]; then
+    echo "[WARN] Icon source not found: ${icon_src}"
+    return
+  fi
+  if ! command -v sips >/dev/null 2>&1; then
+    echo "[WARN] sips is not available. Skipping Android launcher icon sync."
+    return
+  fi
+
+  # Keep launcher resources in sync with the source icon to avoid stale APK icons.
+  sips -z 48 48 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-mdpi/ic_launcher.webp" >/dev/null
+  sips -z 48 48 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-mdpi/ic_launcher_round.webp" >/dev/null
+  sips -z 72 72 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-hdpi/ic_launcher.webp" >/dev/null
+  sips -z 72 72 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-hdpi/ic_launcher_round.webp" >/dev/null
+  sips -z 96 96 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xhdpi/ic_launcher.webp" >/dev/null
+  sips -z 96 96 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp" >/dev/null
+  sips -z 144 144 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xxhdpi/ic_launcher.webp" >/dev/null
+  sips -z 144 144 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp" >/dev/null
+  sips -z 192 192 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" >/dev/null
+  sips -z 192 192 "${icon_src}" --out "${ANDROID_DIR}/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp" >/dev/null
+}
+
 ensure_expo_module_gradle_plugin
 patch_expo_modules_core_plugin
+sync_android_launcher_icons
 
 GRADLE_TASK=""
 APK_SRC=""
