@@ -4,12 +4,16 @@ import test from "node:test";
 import {
   bodyMetricUpdateSchema,
   calendarRangeQuerySchema,
+  mealCheckinInputSchema,
+  mealTemplateInputSchema,
   quickMealLogInputSchema,
   quickMealLogUpdateSchema,
   quickWorkoutLogInputSchema,
   quickWorkoutLogUpdateSchema,
+  softDeleteSchema,
   bodyMetricInputSchema,
-  dashboardQuerySchema
+  dashboardQuerySchema,
+  workoutTemplateInputSchema
 } from "../../packages/api-contract/src/index";
 
 test("dashboard query defaults range to 7d", () => {
@@ -82,4 +86,39 @@ test("body metric update contract requires at least one value", () => {
     id: "metric-1"
   });
   assert.equal(result.success, false);
+});
+
+test("meal checkin contract supports dinner2 slot", () => {
+  const result = mealCheckinInputSchema.safeParse({
+    sessionId: "sess-1",
+    date: "2026-03-01",
+    slot: "dinner2",
+    completed: true
+  });
+  assert.equal(result.success, true);
+});
+
+test("soft delete contract validates payload", () => {
+  const result = softDeleteSchema.safeParse({
+    sessionId: "sess-1",
+    id: "workout-1"
+  });
+  assert.equal(result.success, true);
+});
+
+test("template contracts validate required fields", () => {
+  const meal = mealTemplateInputSchema.safeParse({
+    sessionId: "sess-1",
+    label: "고정 저녁",
+    mealSlot: "dinner2"
+  });
+  const workout = workoutTemplateInputSchema.safeParse({
+    sessionId: "sess-1",
+    label: "등 루틴",
+    bodyPart: "back",
+    purpose: "muscle_gain",
+    tool: "machine"
+  });
+  assert.equal(meal.success, true);
+  assert.equal(workout.success, true);
 });

@@ -4,6 +4,8 @@ type NotionDatabaseConfig = {
   workoutsDbId: string;
   bodyMetricsDbId: string;
   goalsDbId: string;
+  mealTemplatesDbId?: string;
+  workoutTemplatesDbId?: string;
 };
 
 type NotionConfig = {
@@ -27,6 +29,8 @@ function ensureConfig(): NotionConfig {
   const workoutsDbId = process.env.NOTION_DB_WORKOUTS?.trim();
   const bodyMetricsDbId = process.env.NOTION_DB_BODY_METRICS?.trim();
   const goalsDbId = process.env.NOTION_DB_GOALS?.trim();
+  const mealTemplatesDbId = process.env.NOTION_DB_MEAL_TEMPLATES?.trim();
+  const workoutTemplatesDbId = process.env.NOTION_DB_WORKOUT_TEMPLATES?.trim();
 
   const missing: string[] = [];
   if (!token) {
@@ -59,7 +63,9 @@ function ensureConfig(): NotionConfig {
       mealsDbId: mealsDbId!,
       workoutsDbId: workoutsDbId!,
       bodyMetricsDbId: bodyMetricsDbId!,
-      goalsDbId: goalsDbId!
+      goalsDbId: goalsDbId!,
+      ...(mealTemplatesDbId ? { mealTemplatesDbId } : {}),
+      ...(workoutTemplatesDbId ? { workoutTemplatesDbId } : {})
     }
   };
 }
@@ -125,4 +131,8 @@ export async function updateDatabasePage(pageId: string, properties: Record<stri
   return notionRequest(`/pages/${pageId}`, "PATCH", {
     properties
   });
+}
+
+export async function readDatabase(databaseId: string): Promise<unknown> {
+  return notionRequest(`/databases/${databaseId}`, "GET");
 }

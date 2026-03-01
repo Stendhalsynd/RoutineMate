@@ -26,6 +26,8 @@
 - `NOTION_DB_WORKOUTS=...`
 - `NOTION_DB_BODY_METRICS=...`
 - `NOTION_DB_GOALS=...`
+- `NOTION_DB_MEAL_TEMPLATES=...` (선택, 권장)
+- `NOTION_DB_WORKOUT_TEMPLATES=...` (선택, 권장)
 
 ---
 
@@ -54,9 +56,14 @@
 | `Id` | `Rich text` | Y | meal log id |
 | `UserId` | `Rich text` | Y | 사용자 식별자 |
 | `Date` | `Date` | Y | 기록 날짜 |
-| `MealType` | `Select` | Y | `breakfast`/`lunch`/`dinner`/`snack` |
-| `FoodLabel` | `Rich text` | Y | 음식명 |
-| `PortionSize` | `Select` | Y | `small`/`medium`/`large` |
+| `MealType` | `Select` | N | 하위호환(`breakfast`/`lunch`/`dinner`/`snack`) |
+| `FoodLabel` | `Rich text` | N | 하위호환 필드(오타 금지) |
+| `PortionSize` | `Select` | N | 하위호환 필드 |
+| `MealSlot` | `Select` | Y | `breakfast`/`lunch`/`dinner`/`dinner2` |
+| `Completed` | `Checkbox` | Y | 체크인 완료 여부 |
+| `TemplateId` | `Rich text` | N | 연결된 식단 템플릿 ID |
+| `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
+| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## Workouts DB (`NOTION_DB_WORKOUTS`)
@@ -71,11 +78,14 @@
 | `Purpose` | `Select` | Y | `muscle_gain/fat_loss/endurance/mobility/recovery` |
 | `Tool` | `Select` | Y | `bodyweight/dumbbell/machine/barbell/kettlebell/mixed` |
 | `ExerciseName` | `Rich text` | Y | 운동명 |
+| `TemplateId` | `Rich text` | N | 연결된 운동 템플릿 ID |
 | `Intensity` | `Select` | Y | `low/medium/high` |
 | `Sets` | `Number` | N | 세트 |
 | `Reps` | `Number` | N | 반복 |
 | `WeightKg` | `Number` | N | 중량 |
 | `DurationMinutes` | `Number` | N | 운동 시간 |
+| `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
+| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## BodyMetrics DB (`NOTION_DB_BODY_METRICS`)
@@ -88,6 +98,8 @@
 | `Date` | `Date` | Y | 기록 날짜 |
 | `WeightKg` | `Number` | N | 체중 |
 | `BodyFatPct` | `Number` | N | 체지방률 |
+| `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
+| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## Goals DB (`NOTION_DB_GOALS`)
@@ -110,6 +122,7 @@
 ## Meals
 - `MealType`: `breakfast`, `lunch`, `dinner`, `snack`
 - `PortionSize`: `small`, `medium`, `large`
+- `MealSlot`: `breakfast`, `lunch`, `dinner`, `dinner2`
 
 ## Workouts
 - `BodyPart`: `chest`, `back`, `legs`, `core`, `shoulders`, `arms`, `full_body`, `cardio`
@@ -128,3 +141,38 @@
 5. 체중/체지방 저장 성공
 6. 새로고침 후 기록 유지(쿠키 기반 세션 + Notion 조회)
 
+---
+
+## 5) 템플릿 DB (신규)
+
+## MealTemplates DB (`NOTION_DB_MEAL_TEMPLATES`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 표시용 제목 |
+| `Id` | `Rich text` | Y | 템플릿 id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `Label` | `Rich text` | Y | 템플릿 이름 |
+| `MealSlot` | `Select` | Y | `breakfast/lunch/dinner/dinner2` |
+| `IsActive` | `Checkbox` | Y | 활성 여부 |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+## WorkoutTemplates DB (`NOTION_DB_WORKOUT_TEMPLATES`)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 표시용 제목 |
+| `Id` | `Rich text` | Y | 템플릿 id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `Label` | `Rich text` | Y | 템플릿 이름 |
+| `BodyPart` | `Select` | Y | 운동 부위 |
+| `Purpose` | `Select` | Y | 운동 목적 |
+| `Tool` | `Select` | Y | 운동 도구 |
+| `DefaultDuration` | `Number` | N | 기본 운동 시간(분) |
+| `IsActive` | `Checkbox` | Y | 활성 여부 |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+
+## 6) 스키마 오류 트러블슈팅
+- 앱은 시작 시 필수 컬럼 존재를 검사합니다.
+- 컬럼명이 다르면 `필드명 불일치: Meals.FoodLabel` 같은 메시지를 API 에러로 반환합니다.
+- 예: `FoodLabel` 오타(`FootLabel`)가 있으면 식단 저장이 실패합니다.

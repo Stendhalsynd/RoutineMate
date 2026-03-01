@@ -192,3 +192,42 @@
 4. 로그인 정책: 소셜 로그인 필수인지, 익명/게스트 시작 허용할지?
 5. MVP 출시 시점: 1차 목표 기간(예: 6주/8주/12주)은?
 
+
+---
+
+## 11) S3-5 IA/모델 업데이트 (2026-03-01)
+
+### 정보 구조(IA)
+- 기존: 단일 랜딩/기록 혼합 페이지
+- 변경: 3페이지 분리
+  - `/dashboard`: KPI + 버킷 추세(day/week/month) + 목표 read-only 카드
+  - `/records`: 식단 체크인/운동/체성분 기록 및 삭제
+  - `/settings`: 목표 설정 + 템플릿(식단/운동) 관리
+
+### 식단 모델 변경
+- 기존: `foodLabel` 텍스트 입력 중심
+- 변경: `meal-checkin` 중심
+  - 슬롯 고정: `breakfast`, `lunch`, `dinner`, `dinner2`
+  - 상태: `completed=true|false`
+  - 템플릿 선택 시 1탭 저장
+- `POST /v1/meal-logs/quick`는 하위호환 유지
+
+### 집계 표기 규칙
+- range는 그대로 유지: `7d`, `30d`, `90d`
+- 시각화 단위는 자동 전환
+  - `7d -> day`
+  - `30d -> week(ISO week, 월요일 시작)`
+  - `90d -> month(YYYY-MM)`
+- 대시보드 응답에 `granularity`, `buckets`를 포함
+
+### 삭제 정책
+- 삭제는 hard delete가 아닌 soft delete
+- 공통 필드: `IsDeleted(Checkbox)`, `DeletedAt(Date)`
+- 대상: meal checkin/meal log, workout log, body metric
+
+### 템플릿 정책
+- 설정 페이지에서만 템플릿 생성/비활성화
+- 기록 페이지에서는 활성 템플릿만 빠른 선택
+- 템플릿 유형
+  - `MealTemplate(label, mealSlot)`
+  - `WorkoutTemplate(label, bodyPart, purpose, tool, defaultDuration)`

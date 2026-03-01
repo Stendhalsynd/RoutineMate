@@ -3,6 +3,25 @@ import { badRequest, notFound, ok, internalError, zodIssues } from "@/lib/api-ut
 import { aggregateDashboard } from "@/lib/dashboard";
 import { repo } from "@/lib/repository";
 import { resolveSessionId } from "@/lib/session-cookie";
+import { mealSlotToMealType, type MealLog } from "@routinemate/domain";
+
+function mealCheckinToMealLog(
+  checkin: Awaited<ReturnType<typeof repo.listMealCheckinsByUser>>[number]
+): MealLog | null {
+  if (!checkin.completed || checkin.isDeleted) {
+    return null;
+  }
+  return {
+    id: checkin.id,
+    userId: checkin.userId,
+    date: checkin.date,
+    mealType: mealSlotToMealType(checkin.slot),
+    foodLabel: "식단 체크",
+    portionSize: "medium",
+    ...(checkin.templateId ? { templateId: checkin.templateId } : {}),
+    createdAt: checkin.createdAt
+  };
+}
 
 export async function GET(request: Request) {
   try {
@@ -22,9 +41,22 @@ export async function GET(request: Request) {
       return notFound("Session was not found.");
     }
 
+    const mealLogs = await repo.listMealsByUser(session.userId);
+    const checkins = await repo.listMealCheckinsByUser(session.userId);
+    const mergedMeals = new Map<string, MealLog>();
+    for (const item of mealLogs) {
+      mergedMeals.set(item.id, item);
+    }
+    for (const checkin of checkins) {
+      const mapped = mealCheckinToMealLog(checkin);
+      if (mapped) {
+        mergedMeals.set(mapped.id, mapped);
+      }
+    }
+
     const summary = aggregateDashboard({
       range: parsed.data.range,
-      meals: await repo.listMealsByUser(session.userId),
+      meals: Array.from(mergedMeals.values()),
       workouts: await repo.listWorkoutsByUser(session.userId),
       bodyMetrics: await repo.listBodyMetricsByUser(session.userId),
       goals: await repo.listGoalsByUser(session.userId)

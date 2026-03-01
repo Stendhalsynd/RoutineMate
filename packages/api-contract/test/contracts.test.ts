@@ -6,10 +6,14 @@ import {
   calendarRangeQuerySchema,
   calendarDayQuerySchema,
   goalInputSchema,
+  mealCheckinInputSchema,
+  mealTemplateInputSchema,
   quickMealLogInputSchema,
   quickMealLogUpdateSchema,
   quickWorkoutLogInputSchema,
-  quickWorkoutLogUpdateSchema
+  quickWorkoutLogUpdateSchema,
+  softDeleteSchema,
+  workoutTemplateInputSchema
 } from "../src/index";
 
 test("quickMealLogInputSchema parses valid payload", () => {
@@ -57,6 +61,16 @@ test("quickMealLogUpdateSchema rejects payload without update fields", () => {
   assert.equal(result.success, false);
 });
 
+test("mealCheckinInputSchema parses dinner2 slot payload", () => {
+  const result = mealCheckinInputSchema.safeParse({
+    sessionId: "sess-1",
+    date: "2026-03-01",
+    slot: "dinner2",
+    completed: true
+  });
+  assert.equal(result.success, true);
+});
+
 test("quickWorkoutLogUpdateSchema parses valid partial payload", () => {
   const result = quickWorkoutLogUpdateSchema.safeParse({
     sessionId: "sess-1",
@@ -72,6 +86,34 @@ test("bodyMetricUpdateSchema requires at least one field", () => {
     id: "metric-1"
   });
   assert.equal(result.success, false);
+});
+
+test("softDeleteSchema requires id and sessionId", () => {
+  const result = softDeleteSchema.safeParse({
+    sessionId: "sess-1",
+    id: "log-1"
+  });
+  assert.equal(result.success, true);
+});
+
+test("mealTemplateInputSchema validates required fields", () => {
+  const result = mealTemplateInputSchema.safeParse({
+    sessionId: "sess-1",
+    label: "닭가슴살 샐러드",
+    mealSlot: "dinner"
+  });
+  assert.equal(result.success, true);
+});
+
+test("workoutTemplateInputSchema validates required fields", () => {
+  const result = workoutTemplateInputSchema.safeParse({
+    sessionId: "sess-1",
+    label: "하체 루틴 A",
+    bodyPart: "legs",
+    purpose: "muscle_gain",
+    tool: "barbell"
+  });
+  assert.equal(result.success, true);
 });
 
 test("goalInputSchema validates required fields", () => {

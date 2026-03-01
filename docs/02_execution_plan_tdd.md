@@ -139,3 +139,53 @@
    - 대시보드 진행률 확인
 4. 위 3개 여정의 E2E 테스트 스켈레톤 생성
 
+
+---
+
+## 7) S3-5 신규 스프린트 (S3-4 -> S4-1 사이)
+
+### S3-5 목적
+- 정보구조 3분리, 식단 체크인 모델 전환, day/week/month 버킷 집계, soft delete, 템플릿 CRUD를 한 스프린트로 묶어 정리.
+
+### S3-5 작업 분해
+1. `S3-5-1` Notion 스키마 검증 레이어 강화
+- Meals/Workouts/BodyMetrics/Goals + (옵션)Template DB 필드 검증
+- 누락 시 명시 오류: `필드명 불일치: <DB>.<Field>`
+
+2. `S3-5-2` Dashboard 버킷 엔진 전환
+- `range=7d -> day`
+- `range=30d -> week`
+- `range=90d -> month`
+- 샘플링 제거, 버킷 전체 렌더링
+
+3. `S3-5-3` App Router 3페이지 분리
+- `/dashboard`, `/records`, `/settings`
+- 상단 탭 + 모바일 하단 탭 내비
+
+4. `S3-5-4` Meal Checkin API/UI 전환
+- `POST /v1/meal-checkins`
+- `PATCH /v1/meal-checkins/:id`
+- `DELETE /v1/meal-checkins/:id` (soft delete)
+- 슬롯 체크인 카드 UI 적용
+
+5. `S3-5-5` 목표 설정 분리
+- 목표 입력은 `/settings` 전용
+- `/dashboard`는 read-only 목표 카드
+
+6. `S3-5-6` soft delete 연결
+- `DELETE /v1/workout-logs/:id`
+- `DELETE /v1/body-metrics/:id`
+
+7. `S3-5-7` 템플릿 CRUD 연결
+- `GET/POST/PATCH/DELETE /v1/templates/meals`
+- `GET/POST/PATCH/DELETE /v1/templates/workouts`
+- 기록 페이지 템플릿 빠른 선택 연동
+
+8. `S3-5-8` 회귀 검증
+- typecheck + unit/integration tests + API 계약 테스트
+
+### S3-5 테스트 포인트
+- 신규 API 라우트 테스트(meal-checkins/templates/delete)
+- 30d 주간 평균, 90d 월간 평균 집계 정확성
+- soft delete 후 목록/달력 반영 일치
+- 페이지 분리 후 세션/데이터 로드 정상

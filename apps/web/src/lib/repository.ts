@@ -4,14 +4,24 @@ import type {
   Goal,
   GoalInput,
   MealLog,
+  MealCheckin,
+  MealCheckinInput,
+  MealTemplate,
+  WorkoutTemplate,
+  MealSlot,
   QuickMealLogInput,
   QuickWorkoutLogInput,
   Session,
   WorkoutLog
 } from "@routinemate/domain";
 import {
+  mealSlotToMealType,
+  mealTypeToMealSlot
+} from "@routinemate/domain";
+import {
   createDatabasePage,
   getNotionDatabases,
+  readDatabase,
   queryDatabasePages,
   updateDatabasePage
 } from "@/lib/notion-client";
@@ -24,9 +34,12 @@ type NotionPage = {
 type DataStore = {
   sessions: Map<string, Session>;
   meals: MealLog[];
+  mealCheckins: MealCheckin[];
   workouts: WorkoutLog[];
   bodyMetrics: BodyMetric[];
   goals: Goal[];
+  mealTemplates: MealTemplate[];
+  workoutTemplates: WorkoutTemplate[];
 };
 
 const globalKey = "__routinemate_store__";
@@ -35,9 +48,12 @@ const store =
   ((globalThis as Record<string, unknown>)[globalKey] as DataStore | undefined) ?? {
     sessions: new Map<string, Session>(),
     meals: [],
+    mealCheckins: [],
     workouts: [],
     bodyMetrics: [],
-    goals: []
+    goals: [],
+    mealTemplates: [],
+    workoutTemplates: []
   };
 
 (globalThis as Record<string, unknown>)[globalKey] = store;
@@ -176,6 +192,10 @@ function getDate(page: NotionPage, key: string): string | undefined {
   return prop.date.start;
 }
 
+function getDateOrDefault(page: NotionPage, key: string, fallback: string): string {
+  return getDate(page, key) ?? fallback;
+}
+
 function getCheckbox(page: NotionPage, key: string): boolean | undefined {
   const prop = propertyRecord(page)[key] as
     | { type?: string; checkbox?: boolean }
@@ -195,6 +215,35 @@ function getEmail(page: NotionPage, key: string): string | undefined {
   }
   const value = prop.email?.trim();
   return value && value.length > 0 ? value : undefined;
+}
+
+function getRichTextAny(page: NotionPage, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = getRichText(page, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getSelectAny(page: NotionPage, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = getSelect(page, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function toDeleteMeta(page: NotionPage): Pick<MealLog, "isDeleted" | "deletedAt"> {
+  const isDeleted = getCheckbox(page, "IsDeleted");
+  const deletedAt = getDate(page, "DeletedAt");
+  return {
+    ...(isDeleted !== undefined ? { isDeleted } : {}),
+    ...(deletedAt ? { deletedAt } : {})
+  };
 }
 
 function mapSession(page: NotionPage): Session | null {
@@ -225,21 +274,54 @@ function mapMeal(page: NotionPage): MealLog | null {
   const id = getRichText(page, "Id") ?? page.id;
   const userId = getRichText(page, "UserId");
   const date = getDate(page, "Date");
-  const mealType = getSelect(page, "MealType");
-  const foodLabel = getRichText(page, "FoodLabel");
-  const portionSize = getSelect(page, "PortionSize");
-  const createdAt = getDate(page, "CreatedAt");
-  if (!userId || !date || !mealType || !foodLabel || !portionSize || !createdAt) {
+  const slot = getSelect(page, "MealSlot") as MealSlot | undefined;
+  const mealType =
+    (getSelectAny(page, ["MealType"]) as MealLog["mealType"] | undefined) ??
+    (slot ? mealSlotToMealType(slot) : undefined);
+  const foodLabel = getRichTextAny(page, ["FoodLabel", "Label"]) ?? "식단 체크";
+  const portionSize = (getSelectAny(page, ["PortionSize"]) as MealLog["portionSize"] | undefined) ?? "medium";
+  const createdAt = getDateOrDefault(page, "CreatedAt", date ?? "");
+  const completed = getCheckbox(page, "Completed");
+  if (completed === false) {
     return null;
   }
+  if (!userId || !date || !mealType || !createdAt) {
+    return null;
+  }
+  const templateId = getRichText(page, "TemplateId");
   return {
     id,
     userId,
     date: date.slice(0, 10),
-    mealType: mealType as MealLog["mealType"],
+    mealType,
     foodLabel,
-    portionSize: portionSize as MealLog["portionSize"],
-    createdAt
+    portionSize,
+    ...(templateId ? { templateId } : {}),
+    ...toDeleteMeta(page),
+    createdAt: createdAt.slice(0, 10)
+  };
+}
+
+function mapMealCheckin(page: NotionPage): MealCheckin | null {
+  const id = getRichText(page, "Id") ?? page.id;
+  const userId = getRichText(page, "UserId");
+  const date = getDate(page, "Date");
+  const slot = getSelectAny(page, ["MealSlot", "MealType"]);
+  const completed = getCheckbox(page, "Completed");
+  const createdAt = getDateOrDefault(page, "CreatedAt", date ?? "");
+  if (!userId || !date || !slot || completed === undefined || !createdAt) {
+    return null;
+  }
+  const templateId = getRichText(page, "TemplateId");
+  return {
+    id,
+    userId,
+    date: date.slice(0, 10),
+    slot: slot === "snack" ? "dinner2" : (slot as MealSlot),
+    completed,
+    ...(templateId ? { templateId } : {}),
+    ...toDeleteMeta(page),
+    createdAt: createdAt.slice(0, 10)
   };
 }
 
@@ -265,8 +347,13 @@ function mapWorkout(page: NotionPage): WorkoutLog | null {
     tool: tool as WorkoutLog["tool"],
     exerciseName,
     intensity: intensity as WorkoutLog["intensity"],
-    createdAt
+    createdAt: createdAt.slice(0, 10),
+    ...toDeleteMeta(page)
   };
+  const templateId = getRichText(page, "TemplateId");
+  if (templateId) {
+    workout.templateId = templateId;
+  }
   const sets = getNumber(page, "Sets");
   if (sets !== undefined) {
     workout.sets = sets;
@@ -298,7 +385,8 @@ function mapBodyMetric(page: NotionPage): BodyMetric | null {
     id,
     userId,
     date: date.slice(0, 10),
-    createdAt
+    createdAt: createdAt.slice(0, 10),
+    ...toDeleteMeta(page)
   };
   const weightKg = getNumber(page, "WeightKg");
   if (weightKg !== undefined) {
@@ -309,6 +397,50 @@ function mapBodyMetric(page: NotionPage): BodyMetric | null {
     metric.bodyFatPct = bodyFatPct;
   }
   return metric;
+}
+
+function mapMealTemplate(page: NotionPage): MealTemplate | null {
+  const id = getRichText(page, "Id") ?? page.id;
+  const userId = getRichText(page, "UserId");
+  const label = getRichTextAny(page, ["Label", "FoodLabel"]) ?? getTitle(page, "Name");
+  const mealSlot = getSelectAny(page, ["MealSlot", "MealType"]);
+  const createdAt = getDate(page, "CreatedAt");
+  if (!userId || !label || !mealSlot || !createdAt) {
+    return null;
+  }
+  return {
+    id,
+    userId,
+    label,
+    mealSlot: mealSlot === "snack" ? "dinner2" : (mealSlot as MealSlot),
+    isActive: getCheckbox(page, "IsActive") ?? true,
+    createdAt: createdAt.slice(0, 10)
+  };
+}
+
+function mapWorkoutTemplate(page: NotionPage): WorkoutTemplate | null {
+  const id = getRichText(page, "Id") ?? page.id;
+  const userId = getRichText(page, "UserId");
+  const label = getRichText(page, "Label") ?? getTitle(page, "Name");
+  const bodyPart = getSelect(page, "BodyPart");
+  const purpose = getSelect(page, "Purpose");
+  const tool = getSelect(page, "Tool");
+  const createdAt = getDate(page, "CreatedAt");
+  if (!userId || !label || !bodyPart || !purpose || !tool || !createdAt) {
+    return null;
+  }
+  const defaultDuration = getNumber(page, "DefaultDuration");
+  return {
+    id,
+    userId,
+    label,
+    bodyPart: bodyPart as WorkoutTemplate["bodyPart"],
+    purpose: purpose as WorkoutTemplate["purpose"],
+    tool: tool as WorkoutTemplate["tool"],
+    ...(defaultDuration !== undefined ? { defaultDuration } : {}),
+    isActive: getCheckbox(page, "IsActive") ?? true,
+    createdAt: createdAt.slice(0, 10)
+  };
 }
 
 function mapGoal(page: NotionPage): Goal | null {
@@ -355,6 +487,113 @@ async function findNotionUserPageById(
   return target;
 }
 
+const schemaValidationKey = "__routinemate_schema_validation__";
+
+async function validateDatabaseSchema(
+  label: string,
+  databaseId: string,
+  requiredProperties: string[]
+): Promise<void> {
+  const database = (await readDatabase(databaseId)) as {
+    properties?: Record<string, unknown>;
+  };
+  const existingProperties = Object.keys(database.properties ?? {});
+  const missing = requiredProperties.filter((name) => !existingProperties.includes(name));
+  if (missing.length > 0) {
+    throw new Error(`필드명 불일치: ${label}.${missing[0]}`);
+  }
+}
+
+async function ensureNotionSchemaValidated(): Promise<void> {
+  if (isMemoryMode()) {
+    return;
+  }
+  const already = (globalThis as Record<string, unknown>)[schemaValidationKey] as Promise<void> | undefined;
+  if (already) {
+    return already;
+  }
+  const promise = (async () => {
+    const databases = getNotionDatabases();
+    await validateDatabaseSchema("Sessions", databases.sessionsDbId, [
+      "Name",
+      "UserId",
+      "IsGuest",
+      "CreatedAt"
+    ]);
+    await validateDatabaseSchema("Meals", databases.mealsDbId, [
+      "Name",
+      "Id",
+      "UserId",
+      "Date",
+      "MealSlot",
+      "Completed",
+      "IsDeleted",
+      "DeletedAt",
+      "CreatedAt"
+    ]);
+    await validateDatabaseSchema("Workouts", databases.workoutsDbId, [
+      "Name",
+      "Id",
+      "UserId",
+      "Date",
+      "BodyPart",
+      "Purpose",
+      "Tool",
+      "ExerciseName",
+      "Intensity",
+      "IsDeleted",
+      "DeletedAt",
+      "CreatedAt"
+    ]);
+    await validateDatabaseSchema("BodyMetrics", databases.bodyMetricsDbId, [
+      "Name",
+      "Id",
+      "UserId",
+      "Date",
+      "IsDeleted",
+      "DeletedAt",
+      "CreatedAt"
+    ]);
+    await validateDatabaseSchema("Goals", databases.goalsDbId, [
+      "Name",
+      "Id",
+      "UserId",
+      "WeeklyRoutineTarget",
+      "CreatedAt"
+    ]);
+    if (databases.mealTemplatesDbId) {
+      await validateDatabaseSchema("MealTemplates", databases.mealTemplatesDbId, [
+        "Name",
+        "Id",
+        "UserId",
+        "Label",
+        "MealSlot",
+        "IsActive",
+        "CreatedAt"
+      ]);
+    }
+    if (databases.workoutTemplatesDbId) {
+      await validateDatabaseSchema("WorkoutTemplates", databases.workoutTemplatesDbId, [
+        "Name",
+        "Id",
+        "UserId",
+        "Label",
+        "BodyPart",
+        "Purpose",
+        "Tool",
+        "IsActive",
+        "CreatedAt"
+      ]);
+    }
+  })();
+  const guarded = promise.catch((error) => {
+    delete (globalThis as Record<string, unknown>)[schemaValidationKey];
+    throw error;
+  });
+  (globalThis as Record<string, unknown>)[schemaValidationKey] = guarded;
+  return guarded;
+}
+
 export const repo = {
   async createGuestSession(deviceId?: string): Promise<Session> {
     if (isMemoryMode()) {
@@ -372,6 +611,7 @@ export const repo = {
       return session;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const session: Session = {
       sessionId: createId("sess"),
@@ -406,6 +646,7 @@ export const repo = {
       return upgraded;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const result = await queryDatabasePages(databases.sessionsDbId, {
       filter: {
@@ -440,6 +681,7 @@ export const repo = {
       return store.sessions.get(sessionId) ?? null;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const result = await queryDatabasePages(databases.sessionsDbId, {
       filter: {
@@ -466,6 +708,7 @@ export const repo = {
       return log;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const log: MealLog = {
       id: createId("meal"),
@@ -481,9 +724,9 @@ export const repo = {
       Id: richTextProperty(log.id),
       UserId: richTextProperty(log.userId),
       Date: dateProperty(log.date),
-      MealType: selectProperty(log.mealType),
-      FoodLabel: richTextProperty(log.foodLabel),
-      PortionSize: selectProperty(log.portionSize),
+      MealSlot: selectProperty(mealTypeToMealSlot(log.mealType)),
+      Completed: checkboxProperty(true),
+      IsDeleted: checkboxProperty(false),
       CreatedAt: dateProperty(log.createdAt)
     });
     return log;
@@ -500,6 +743,7 @@ export const repo = {
         tool: input.tool,
         exerciseName: input.exerciseName,
         intensity: input.intensity ?? "medium",
+        ...(input.templateId ? { templateId: input.templateId } : {}),
         createdAt: nowIso()
       };
       if (input.sets !== undefined) {
@@ -518,6 +762,7 @@ export const repo = {
       return log;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const log: WorkoutLog = {
       id: createId("workout"),
@@ -528,6 +773,7 @@ export const repo = {
       tool: input.tool,
       exerciseName: input.exerciseName,
       intensity: input.intensity ?? "medium",
+      ...(input.templateId ? { templateId: input.templateId } : {}),
       createdAt: nowIso()
     };
     if (input.sets !== undefined) {
@@ -553,10 +799,12 @@ export const repo = {
       Tool: selectProperty(log.tool),
       ExerciseName: richTextProperty(log.exerciseName),
       Intensity: selectProperty(log.intensity),
+      ...(log.templateId ? { TemplateId: richTextProperty(log.templateId) } : {}),
       ...(log.sets !== undefined ? { Sets: numberProperty(log.sets) } : {}),
       ...(log.reps !== undefined ? { Reps: numberProperty(log.reps) } : {}),
       ...(log.weightKg !== undefined ? { WeightKg: numberProperty(log.weightKg) } : {}),
       ...(log.durationMinutes !== undefined ? { DurationMinutes: numberProperty(log.durationMinutes) } : {}),
+      IsDeleted: checkboxProperty(false),
       CreatedAt: dateProperty(log.createdAt)
     });
     return log;
@@ -580,6 +828,7 @@ export const repo = {
       return metric;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const metric: BodyMetric = {
       id: createId("metric"),
@@ -601,9 +850,465 @@ export const repo = {
       Date: dateProperty(metric.date),
       ...(metric.weightKg !== undefined ? { WeightKg: numberProperty(metric.weightKg) } : {}),
       ...(metric.bodyFatPct !== undefined ? { BodyFatPct: numberProperty(metric.bodyFatPct) } : {}),
+      IsDeleted: checkboxProperty(false),
       CreatedAt: dateProperty(metric.createdAt)
     });
     return metric;
+  },
+
+  async addMealCheckin(userId: string, input: Omit<MealCheckinInput, "sessionId">): Promise<MealCheckin> {
+    if (isMemoryMode()) {
+      const existing = store.mealCheckins.find(
+        (item) => item.userId === userId && item.date === input.date && item.slot === input.slot && item.isDeleted !== true
+      );
+      if (existing) {
+        existing.completed = input.completed;
+        if (input.templateId !== undefined) {
+          existing.templateId = input.templateId;
+        } else {
+          delete existing.templateId;
+        }
+        return existing;
+      }
+
+      const checkin: MealCheckin = {
+        id: createId("mchk"),
+        userId,
+        date: input.date,
+        slot: input.slot,
+        completed: input.completed,
+        ...(input.templateId ? { templateId: input.templateId } : {}),
+        isDeleted: false,
+        createdAt: nowIso().slice(0, 10)
+      };
+      store.mealCheckins.push(checkin);
+      return checkin;
+    }
+
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const existingPage = (
+      await queryDatabasePages(databases.mealsDbId, {
+        filter: { property: "UserId", rich_text: { equals: userId } },
+        sorts: [{ property: "CreatedAt", direction: "descending" }]
+      })
+    )
+      .map(toPage)
+      .find((page) => {
+        const current = mapMealCheckin(page);
+        return current !== null && current.date === input.date && current.slot === input.slot && current.isDeleted !== true;
+      });
+
+    if (existingPage) {
+      const mapped = mapMealCheckin(existingPage);
+      if (mapped) {
+        const next: MealCheckin = {
+          ...mapped,
+          completed: input.completed,
+          ...(input.templateId !== undefined ? { templateId: input.templateId } : {})
+        };
+        await updateDatabasePage(existingPage.id, {
+          Date: dateProperty(next.date),
+          MealSlot: selectProperty(next.slot),
+          Completed: checkboxProperty(next.completed),
+          ...(next.templateId ? { TemplateId: richTextProperty(next.templateId) } : {}),
+          IsDeleted: checkboxProperty(false),
+          DeletedAt: { date: null }
+        });
+        return next;
+      }
+    }
+
+    const checkin: MealCheckin = {
+      id: createId("mchk"),
+      userId,
+      date: input.date,
+      slot: input.slot,
+      completed: input.completed,
+      ...(input.templateId ? { templateId: input.templateId } : {}),
+      isDeleted: false,
+      createdAt: nowIso().slice(0, 10)
+    };
+    await createDatabasePage(databases.mealsDbId, {
+      Name: titleProperty(`${checkin.date} ${checkin.slot}`),
+      Id: richTextProperty(checkin.id),
+      UserId: richTextProperty(checkin.userId),
+      Date: dateProperty(checkin.date),
+      MealSlot: selectProperty(checkin.slot),
+      Completed: checkboxProperty(checkin.completed),
+      ...(checkin.templateId ? { TemplateId: richTextProperty(checkin.templateId) } : {}),
+      IsDeleted: checkboxProperty(false),
+      CreatedAt: dateProperty(checkin.createdAt)
+    });
+    return checkin;
+  },
+
+  async updateMealCheckin(
+    userId: string,
+    id: string,
+    updates: Partial<Pick<MealCheckin, "date" | "slot" | "completed" | "templateId">>
+  ): Promise<MealCheckin | null> {
+    if (isMemoryMode()) {
+      const index = store.mealCheckins.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.mealCheckins[index];
+      if (!current) {
+        return null;
+      }
+      const next: MealCheckin = {
+        ...current,
+        ...updates
+      };
+      store.mealCheckins[index] = next;
+      return next;
+    }
+
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.mealsDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapMealCheckin(page);
+    if (!current) {
+      return null;
+    }
+    const next: MealCheckin = {
+      ...current,
+      ...updates
+    };
+    await updateDatabasePage(page.id, {
+      Date: dateProperty(next.date),
+      MealSlot: selectProperty(next.slot),
+      Completed: checkboxProperty(next.completed),
+      ...(next.templateId ? { TemplateId: richTextProperty(next.templateId) } : {})
+    });
+    return next;
+  },
+
+  async listMealCheckinsByUser(userId: string): Promise<MealCheckin[]> {
+    if (isMemoryMode()) {
+      return store.mealCheckins.filter((item) => item.userId === userId && item.isDeleted !== true);
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const pages = await queryDatabasePages(databases.mealsDbId, {
+      filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapMealCheckin)
+      .filter((item): item is MealCheckin => item !== null && item.isDeleted !== true);
+  },
+
+  async softDeleteMealCheckin(userId: string, id: string): Promise<boolean> {
+    if (isMemoryMode()) {
+      const target = store.mealCheckins.find((item) => item.userId === userId && item.id === id);
+      if (!target) {
+        return false;
+      }
+      target.isDeleted = true;
+      target.deletedAt = nowIso().slice(0, 10);
+      return true;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.mealsDbId, userId, id);
+    if (!page) {
+      return false;
+    }
+    await updateDatabasePage(page.id, {
+      IsDeleted: checkboxProperty(true),
+      DeletedAt: dateProperty(nowIso().slice(0, 10))
+    });
+    return true;
+  },
+
+  async softDeleteWorkoutLog(userId: string, id: string): Promise<boolean> {
+    if (isMemoryMode()) {
+      const target = store.workouts.find((item) => item.userId === userId && item.id === id);
+      if (!target) {
+        return false;
+      }
+      target.isDeleted = true;
+      target.deletedAt = nowIso().slice(0, 10);
+      return true;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.workoutsDbId, userId, id);
+    if (!page) {
+      return false;
+    }
+    await updateDatabasePage(page.id, {
+      IsDeleted: checkboxProperty(true),
+      DeletedAt: dateProperty(nowIso().slice(0, 10))
+    });
+    return true;
+  },
+
+  async softDeleteBodyMetric(userId: string, id: string): Promise<boolean> {
+    if (isMemoryMode()) {
+      const target = store.bodyMetrics.find((item) => item.userId === userId && item.id === id);
+      if (!target) {
+        return false;
+      }
+      target.isDeleted = true;
+      target.deletedAt = nowIso().slice(0, 10);
+      return true;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.bodyMetricsDbId, userId, id);
+    if (!page) {
+      return false;
+    }
+    await updateDatabasePage(page.id, {
+      IsDeleted: checkboxProperty(true),
+      DeletedAt: dateProperty(nowIso().slice(0, 10))
+    });
+    return true;
+  },
+
+  async createMealTemplate(
+    userId: string,
+    input: Omit<MealTemplate, "id" | "userId" | "createdAt">
+  ): Promise<MealTemplate> {
+    if (isMemoryMode()) {
+      const template: MealTemplate = {
+        id: createId("mtpl"),
+        userId,
+        label: input.label,
+        mealSlot: input.mealSlot,
+        isActive: input.isActive,
+        createdAt: nowIso().slice(0, 10)
+      };
+      store.mealTemplates.push(template);
+      return template;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.mealTemplatesDbId) {
+      throw new Error("Notion integration is not configured. Missing env: NOTION_DB_MEAL_TEMPLATES");
+    }
+    const template: MealTemplate = {
+      id: createId("mtpl"),
+      userId,
+      label: input.label,
+      mealSlot: input.mealSlot,
+      isActive: input.isActive,
+      createdAt: nowIso().slice(0, 10)
+    };
+    await createDatabasePage(databases.mealTemplatesDbId, {
+      Name: titleProperty(template.label),
+      Id: richTextProperty(template.id),
+      UserId: richTextProperty(template.userId),
+      Label: richTextProperty(template.label),
+      MealSlot: selectProperty(template.mealSlot),
+      IsActive: checkboxProperty(template.isActive),
+      CreatedAt: dateProperty(template.createdAt)
+    });
+    return template;
+  },
+
+  async listMealTemplatesByUser(userId: string): Promise<MealTemplate[]> {
+    if (isMemoryMode()) {
+      return store.mealTemplates.filter((item) => item.userId === userId);
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.mealTemplatesDbId) {
+      return [];
+    }
+    const pages = await queryDatabasePages(databases.mealTemplatesDbId, {
+      filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapMealTemplate)
+      .filter((item): item is MealTemplate => item !== null);
+  },
+
+  async updateMealTemplate(
+    userId: string,
+    id: string,
+    updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>
+  ): Promise<MealTemplate | null> {
+    if (isMemoryMode()) {
+      const index = store.mealTemplates.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.mealTemplates[index];
+      if (!current) {
+        return null;
+      }
+      const next: MealTemplate = {
+        ...current,
+        ...updates
+      };
+      store.mealTemplates[index] = next;
+      return next;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.mealTemplatesDbId) {
+      return null;
+    }
+    const page = await findNotionUserPageById(databases.mealTemplatesDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapMealTemplate(page);
+    if (!current) {
+      return null;
+    }
+    const next: MealTemplate = {
+      ...current,
+      ...updates
+    };
+    await updateDatabasePage(page.id, {
+      Name: titleProperty(next.label),
+      Label: richTextProperty(next.label),
+      MealSlot: selectProperty(next.mealSlot),
+      IsActive: checkboxProperty(next.isActive)
+    });
+    return next;
+  },
+
+  async deleteMealTemplate(userId: string, id: string): Promise<boolean> {
+    const updated = await repo.updateMealTemplate(userId, id, { isActive: false });
+    return updated !== null;
+  },
+
+  async createWorkoutTemplate(
+    userId: string,
+    input: Omit<WorkoutTemplate, "id" | "userId" | "createdAt">
+  ): Promise<WorkoutTemplate> {
+    if (isMemoryMode()) {
+      const template: WorkoutTemplate = {
+        id: createId("wtpl"),
+        userId,
+        label: input.label,
+        bodyPart: input.bodyPart,
+        purpose: input.purpose,
+        tool: input.tool,
+        ...(input.defaultDuration !== undefined ? { defaultDuration: input.defaultDuration } : {}),
+        isActive: input.isActive,
+        createdAt: nowIso().slice(0, 10)
+      };
+      store.workoutTemplates.push(template);
+      return template;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.workoutTemplatesDbId) {
+      throw new Error("Notion integration is not configured. Missing env: NOTION_DB_WORKOUT_TEMPLATES");
+    }
+    const template: WorkoutTemplate = {
+      id: createId("wtpl"),
+      userId,
+      label: input.label,
+      bodyPart: input.bodyPart,
+      purpose: input.purpose,
+      tool: input.tool,
+      ...(input.defaultDuration !== undefined ? { defaultDuration: input.defaultDuration } : {}),
+      isActive: input.isActive,
+      createdAt: nowIso().slice(0, 10)
+    };
+    await createDatabasePage(databases.workoutTemplatesDbId, {
+      Name: titleProperty(template.label),
+      Id: richTextProperty(template.id),
+      UserId: richTextProperty(template.userId),
+      Label: richTextProperty(template.label),
+      BodyPart: selectProperty(template.bodyPart),
+      Purpose: selectProperty(template.purpose),
+      Tool: selectProperty(template.tool),
+      ...(template.defaultDuration !== undefined ? { DefaultDuration: numberProperty(template.defaultDuration) } : {}),
+      IsActive: checkboxProperty(template.isActive),
+      CreatedAt: dateProperty(template.createdAt)
+    });
+    return template;
+  },
+
+  async listWorkoutTemplatesByUser(userId: string): Promise<WorkoutTemplate[]> {
+    if (isMemoryMode()) {
+      return store.workoutTemplates.filter((item) => item.userId === userId);
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.workoutTemplatesDbId) {
+      return [];
+    }
+    const pages = await queryDatabasePages(databases.workoutTemplatesDbId, {
+      filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapWorkoutTemplate)
+      .filter((item): item is WorkoutTemplate => item !== null);
+  },
+
+  async updateWorkoutTemplate(
+    userId: string,
+    id: string,
+    updates: Partial<
+      Pick<WorkoutTemplate, "label" | "bodyPart" | "purpose" | "tool" | "defaultDuration" | "isActive">
+    >
+  ): Promise<WorkoutTemplate | null> {
+    if (isMemoryMode()) {
+      const index = store.workoutTemplates.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.workoutTemplates[index];
+      if (!current) {
+        return null;
+      }
+      const next: WorkoutTemplate = {
+        ...current,
+        ...updates
+      };
+      store.workoutTemplates[index] = next;
+      return next;
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    if (!databases.workoutTemplatesDbId) {
+      return null;
+    }
+    const page = await findNotionUserPageById(databases.workoutTemplatesDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapWorkoutTemplate(page);
+    if (!current) {
+      return null;
+    }
+    const next: WorkoutTemplate = {
+      ...current,
+      ...updates
+    };
+    await updateDatabasePage(page.id, {
+      Name: titleProperty(next.label),
+      Label: richTextProperty(next.label),
+      BodyPart: selectProperty(next.bodyPart),
+      Purpose: selectProperty(next.purpose),
+      Tool: selectProperty(next.tool),
+      ...(next.defaultDuration !== undefined ? { DefaultDuration: numberProperty(next.defaultDuration) } : {}),
+      IsActive: checkboxProperty(next.isActive)
+    });
+    return next;
+  },
+
+  async deleteWorkoutTemplate(userId: string, id: string): Promise<boolean> {
+    const updated = await repo.updateWorkoutTemplate(userId, id, { isActive: false });
+    return updated !== null;
   },
 
   async updateMealLog(
@@ -628,6 +1333,7 @@ export const repo = {
       return next;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const page = await findNotionUserPageById(databases.mealsDbId, userId, id);
     if (!page) {
@@ -645,9 +1351,8 @@ export const repo = {
     await updateDatabasePage(page.id, {
       Name: titleProperty(`${next.date} ${next.foodLabel}`),
       Date: dateProperty(next.date),
-      MealType: selectProperty(next.mealType),
-      FoodLabel: richTextProperty(next.foodLabel),
-      PortionSize: selectProperty(next.portionSize)
+      MealSlot: selectProperty(mealTypeToMealSlot(next.mealType)),
+      Completed: checkboxProperty(true)
     });
     return next;
   },
@@ -658,7 +1363,17 @@ export const repo = {
     updates: Partial<
       Pick<
         WorkoutLog,
-        "date" | "bodyPart" | "purpose" | "tool" | "exerciseName" | "sets" | "reps" | "weightKg" | "durationMinutes" | "intensity"
+        | "date"
+        | "bodyPart"
+        | "purpose"
+        | "tool"
+        | "exerciseName"
+        | "templateId"
+        | "sets"
+        | "reps"
+        | "weightKg"
+        | "durationMinutes"
+        | "intensity"
       >
     >
   ): Promise<WorkoutLog | null> {
@@ -679,6 +1394,7 @@ export const repo = {
       return next;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const page = await findNotionUserPageById(databases.workoutsDbId, userId, id);
     if (!page) {
@@ -701,6 +1417,7 @@ export const repo = {
       Tool: selectProperty(next.tool),
       ExerciseName: richTextProperty(next.exerciseName),
       Intensity: selectProperty(next.intensity),
+      ...(next.templateId !== undefined ? { TemplateId: richTextProperty(next.templateId) } : {}),
       ...(next.sets !== undefined ? { Sets: numberProperty(next.sets) } : {}),
       ...(next.reps !== undefined ? { Reps: numberProperty(next.reps) } : {}),
       ...(next.weightKg !== undefined ? { WeightKg: numberProperty(next.weightKg) } : {}),
@@ -731,6 +1448,7 @@ export const repo = {
       return next;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const page = await findNotionUserPageById(databases.bodyMetricsDbId, userId, id);
     if (!page) {
@@ -782,6 +1500,7 @@ export const repo = {
       return base;
     }
 
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const existingPages = (await queryDatabasePages(databases.goalsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
@@ -826,8 +1545,9 @@ export const repo = {
 
   async listMealsByUser(userId: string): Promise<MealLog[]> {
     if (isMemoryMode()) {
-      return store.meals.filter((item) => item.userId === userId);
+      return store.meals.filter((item) => item.userId === userId && item.isDeleted !== true);
     }
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const pages = await queryDatabasePages(databases.mealsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
@@ -836,13 +1556,14 @@ export const repo = {
     return pages
       .map(toPage)
       .map(mapMeal)
-      .filter((item): item is MealLog => item !== null);
+      .filter((item): item is MealLog => item !== null && item.isDeleted !== true);
   },
 
   async listWorkoutsByUser(userId: string): Promise<WorkoutLog[]> {
     if (isMemoryMode()) {
-      return store.workouts.filter((item) => item.userId === userId);
+      return store.workouts.filter((item) => item.userId === userId && item.isDeleted !== true);
     }
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const pages = await queryDatabasePages(databases.workoutsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
@@ -851,13 +1572,14 @@ export const repo = {
     return pages
       .map(toPage)
       .map(mapWorkout)
-      .filter((item): item is WorkoutLog => item !== null);
+      .filter((item): item is WorkoutLog => item !== null && item.isDeleted !== true);
   },
 
   async listBodyMetricsByUser(userId: string): Promise<BodyMetric[]> {
     if (isMemoryMode()) {
-      return store.bodyMetrics.filter((item) => item.userId === userId);
+      return store.bodyMetrics.filter((item) => item.userId === userId && item.isDeleted !== true);
     }
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const pages = await queryDatabasePages(databases.bodyMetricsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
@@ -866,13 +1588,14 @@ export const repo = {
     return pages
       .map(toPage)
       .map(mapBodyMetric)
-      .filter((item): item is BodyMetric => item !== null);
+      .filter((item): item is BodyMetric => item !== null && item.isDeleted !== true);
   },
 
   async listGoalsByUser(userId: string): Promise<Goal[]> {
     if (isMemoryMode()) {
       return store.goals.filter((item) => item.userId === userId);
     }
+    await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
     const pages = await queryDatabasePages(databases.goalsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
@@ -890,8 +1613,11 @@ export const repo = {
     }
     store.sessions.clear();
     store.meals.length = 0;
+    store.mealCheckins.length = 0;
     store.workouts.length = 0;
     store.bodyMetrics.length = 0;
     store.goals.length = 0;
+    store.mealTemplates.length = 0;
+    store.workoutTemplates.length = 0;
   }
 };

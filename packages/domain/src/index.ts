@@ -1,4 +1,5 @@
 export type MealType = "breakfast" | "lunch" | "dinner" | "snack";
+export type MealSlot = "breakfast" | "lunch" | "dinner" | "dinner2";
 export type PortionSize = "small" | "medium" | "large";
 
 export type BodyPart = "chest" | "back" | "legs" | "core" | "shoulders" | "arms" | "full_body" | "cardio";
@@ -7,6 +8,7 @@ export type WorkoutTool = "bodyweight" | "dumbbell" | "machine" | "barbell" | "k
 export type WorkoutIntensity = "low" | "medium" | "high";
 
 export type RangeKey = "7d" | "30d" | "90d";
+export type DashboardGranularity = "day" | "week" | "month";
 
 export interface ScoringPolicy {
   dietWeight: number;
@@ -28,6 +30,14 @@ export interface QuickMealLogInput {
   portionSize: PortionSize;
 }
 
+export interface MealCheckinInput {
+  sessionId: string;
+  date: string;
+  slot: MealSlot;
+  completed: boolean;
+  templateId?: string;
+}
+
 export interface QuickWorkoutLogInput {
   sessionId: string;
   date: string;
@@ -35,6 +45,7 @@ export interface QuickWorkoutLogInput {
   purpose: WorkoutPurpose;
   tool: WorkoutTool;
   exerciseName: string;
+  templateId?: string;
   sets?: number;
   reps?: number;
   weightKg?: number;
@@ -66,17 +77,33 @@ export interface Session {
   email?: string;
 }
 
-export interface MealLog {
+export interface DeleteMeta {
+  isDeleted?: boolean;
+  deletedAt?: string;
+}
+
+export interface MealCheckin extends DeleteMeta {
+  id: string;
+  userId: string;
+  date: string;
+  slot: MealSlot;
+  completed: boolean;
+  templateId?: string;
+  createdAt: string;
+}
+
+export interface MealLog extends DeleteMeta {
   id: string;
   userId: string;
   date: string;
   mealType: MealType;
   foodLabel: string;
   portionSize: PortionSize;
+  templateId?: string;
   createdAt: string;
 }
 
-export interface WorkoutLog {
+export interface WorkoutLog extends DeleteMeta {
   id: string;
   userId: string;
   date: string;
@@ -89,10 +116,11 @@ export interface WorkoutLog {
   weightKg?: number;
   durationMinutes?: number;
   intensity: WorkoutIntensity;
+  templateId?: string;
   createdAt: string;
 }
 
-export interface BodyMetric {
+export interface BodyMetric extends DeleteMeta {
   id: string;
   userId: string;
   date: string;
@@ -108,6 +136,27 @@ export interface Goal {
   targetWeightKg?: number;
   targetBodyFat?: number;
   weeklyRoutineTarget: number;
+  createdAt: string;
+}
+
+export interface MealTemplate {
+  id: string;
+  userId: string;
+  label: string;
+  mealSlot: MealSlot;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface WorkoutTemplate {
+  id: string;
+  userId: string;
+  label: string;
+  bodyPart: BodyPart;
+  purpose: WorkoutPurpose;
+  tool: WorkoutTool;
+  defaultDuration?: number;
+  isActive: boolean;
   createdAt: string;
 }
 
@@ -150,14 +199,27 @@ export interface CalendarCellSummary {
   color: "green" | "yellow" | "red";
 }
 
+export interface DashboardBucket {
+  key: string;
+  label: string;
+  from: string;
+  to: string;
+  avgOverallScore: number;
+  mealCheckRate: number;
+  workoutRate: number;
+  bodyMetricRate: number;
+}
+
 export interface DashboardSummary {
   range: RangeKey;
+  granularity: DashboardGranularity;
   adherenceRate: number;
   totalMeals: number;
   totalWorkouts: number;
   latestWeightKg: number | null;
   latestBodyFatPct: number | null;
   daily: DailyProgress[];
+  buckets: DashboardBucket[];
   goals: GoalProgress[];
   consistencyMeta?: DashboardConsistencyMeta;
 }
@@ -211,6 +273,20 @@ function toDateKey(date: string): string {
   return date.slice(0, 10);
 }
 
+export function mealSlotToMealType(slot: MealSlot): MealType {
+  if (slot === "dinner2") {
+    return "snack";
+  }
+  return slot;
+}
+
+export function mealTypeToMealSlot(type: MealType): MealSlot {
+  if (type === "snack") {
+    return "dinner2";
+  }
+  return type;
+}
+
 function toDayMs(dateKey: string): number {
   return Date.parse(`${dateKey}T00:00:00.000Z`);
 }
@@ -237,6 +313,16 @@ export function rangeToDays(range: RangeKey): number {
     return 90;
   }
   return 7;
+}
+
+export function rangeToGranularity(range: RangeKey): DashboardGranularity {
+  if (range === "30d") {
+    return "week";
+  }
+  if (range === "90d") {
+    return "month";
+  }
+  return "day";
 }
 
 export function calculateDietScore(mealLogsOrCount: QuickMealLogInput[] | MealLog[] | number): number {

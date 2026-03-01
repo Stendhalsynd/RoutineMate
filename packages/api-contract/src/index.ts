@@ -43,6 +43,34 @@ export const quickMealLogInputSchema = z.object({
   portionSize: z.enum(["small", "medium", "large"])
 });
 
+export const mealCheckinInputSchema = z.object({
+  sessionId: nonEmptyString,
+  date: isoDateSchema,
+  slot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]),
+  completed: z.boolean(),
+  templateId: nonEmptyString.optional()
+});
+
+export const mealCheckinUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    date: isoDateSchema.optional(),
+    slot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]).optional(),
+    completed: z.boolean().optional(),
+    templateId: nonEmptyString.optional()
+  })
+  .refine(
+    (value) =>
+      value.date !== undefined ||
+      value.slot !== undefined ||
+      value.completed !== undefined ||
+      value.templateId !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
+
 export const quickMealLogUpdateSchema = z
   .object({
     sessionId: nonEmptyString,
@@ -70,6 +98,7 @@ export const quickWorkoutLogInputSchema = z.object({
   purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]),
   tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]),
   exerciseName: nonEmptyString.max(120),
+  templateId: nonEmptyString.optional(),
   sets: z.number().int().min(1).max(20).optional(),
   reps: z.number().int().min(1).max(100).optional(),
   weightKg: z.number().min(0).max(500).optional(),
@@ -86,6 +115,7 @@ export const quickWorkoutLogUpdateSchema = z
     purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
     tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional(),
     exerciseName: nonEmptyString.max(120).optional(),
+    templateId: nonEmptyString.optional(),
     sets: z.number().int().min(1).max(20).optional(),
     reps: z.number().int().min(1).max(100).optional(),
     weightKg: z.number().min(0).max(500).optional(),
@@ -99,6 +129,7 @@ export const quickWorkoutLogUpdateSchema = z
       value.purpose !== undefined ||
       value.tool !== undefined ||
       value.exerciseName !== undefined ||
+      value.templateId !== undefined ||
       value.sets !== undefined ||
       value.reps !== undefined ||
       value.weightKg !== undefined ||
@@ -172,6 +203,64 @@ export const workoutSuggestionQuerySchema = z.object({
   tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional()
 });
 
+export const softDeleteSchema = z.object({
+  sessionId: nonEmptyString,
+  id: nonEmptyString
+});
+
+export const mealTemplateInputSchema = z.object({
+  sessionId: nonEmptyString,
+  label: nonEmptyString.max(120),
+  mealSlot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]),
+  isActive: z.boolean().default(true)
+});
+
+export const mealTemplateUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    label: nonEmptyString.max(120).optional(),
+    mealSlot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]).optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine((value) => value.label !== undefined || value.mealSlot !== undefined || value.isActive !== undefined, {
+    message: "At least one field is required"
+  });
+
+export const workoutTemplateInputSchema = z.object({
+  sessionId: nonEmptyString,
+  label: nonEmptyString.max(120),
+  bodyPart: z.enum(["chest", "back", "legs", "core", "shoulders", "arms", "full_body", "cardio"]),
+  purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]),
+  tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]),
+  defaultDuration: z.number().int().min(1).max(300).optional(),
+  isActive: z.boolean().default(true)
+});
+
+export const workoutTemplateUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    label: nonEmptyString.max(120).optional(),
+    bodyPart: z.enum(["chest", "back", "legs", "core", "shoulders", "arms", "full_body", "cardio"]).optional(),
+    purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
+    tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional(),
+    defaultDuration: z.number().int().min(1).max(300).optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine(
+    (value) =>
+      value.label !== undefined ||
+      value.bodyPart !== undefined ||
+      value.purpose !== undefined ||
+      value.tool !== undefined ||
+      value.defaultDuration !== undefined ||
+      value.isActive !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
+
 export function formatZodIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => {
     const path = issue.path.length > 0 ? issue.path.join(".") : "body";
@@ -182,6 +271,8 @@ export function formatZodIssues(error: z.ZodError): string[] {
 export type AuthGuestRequest = z.infer<typeof authGuestRequestSchema>;
 export type AuthUpgradeRequest = z.infer<typeof authUpgradeRequestSchema>;
 export type QuickMealLogRequest = z.infer<typeof quickMealLogInputSchema>;
+export type MealCheckinRequest = z.infer<typeof mealCheckinInputSchema>;
+export type MealCheckinUpdateRequest = z.infer<typeof mealCheckinUpdateSchema>;
 export type QuickMealLogUpdateRequest = z.infer<typeof quickMealLogUpdateSchema>;
 export type QuickWorkoutLogRequest = z.infer<typeof quickWorkoutLogInputSchema>;
 export type QuickWorkoutLogUpdateRequest = z.infer<typeof quickWorkoutLogUpdateSchema>;
@@ -193,3 +284,8 @@ export type CalendarDayQuery = z.infer<typeof calendarDayQuerySchema>;
 export type CalendarRangeQuery = z.infer<typeof calendarRangeQuerySchema>;
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>;
 export type WorkoutSuggestionQuery = z.infer<typeof workoutSuggestionQuerySchema>;
+export type SoftDeleteRequest = z.infer<typeof softDeleteSchema>;
+export type MealTemplateRequest = z.infer<typeof mealTemplateInputSchema>;
+export type MealTemplateUpdateRequest = z.infer<typeof mealTemplateUpdateSchema>;
+export type WorkoutTemplateRequest = z.infer<typeof workoutTemplateInputSchema>;
+export type WorkoutTemplateUpdateRequest = z.infer<typeof workoutTemplateUpdateSchema>;
