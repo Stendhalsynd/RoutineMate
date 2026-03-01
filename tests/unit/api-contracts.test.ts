@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  googleSessionRequestSchema,
+  googleUpgradeRequestSchema,
   bodyMetricUpdateSchema,
   calendarRangeQuerySchema,
+  reminderEvaluateQuerySchema,
+  reminderSettingsInputSchema,
   mealCheckinInputSchema,
   mealTemplateInputSchema,
   quickMealLogInputSchema,
@@ -121,4 +125,36 @@ test("template contracts validate required fields", () => {
   });
   assert.equal(meal.success, true);
   assert.equal(workout.success, true);
+});
+
+test("google upgrade/session contracts validate core fields", () => {
+  const upgrade = googleUpgradeRequestSchema.safeParse({
+    sessionId: "sess-1",
+    idToken: "token-value",
+    platform: "web"
+  });
+  const session = googleSessionRequestSchema.safeParse({
+    idToken: "token-value",
+    platform: "android"
+  });
+  assert.equal(upgrade.success, true);
+  assert.equal(session.success, true);
+});
+
+test("reminder contracts validate time and date format", () => {
+  const settings = reminderSettingsInputSchema.safeParse({
+    sessionId: "sess-1",
+    isEnabled: true,
+    dailyReminderTime: "20:30",
+    missingLogReminderTime: "21:30",
+    channels: ["web_in_app", "mobile_local"],
+    timezone: "Asia/Seoul"
+  });
+  const evaluate = reminderEvaluateQuerySchema.safeParse({
+    sessionId: "sess-1",
+    date: "2026-03-01"
+  });
+
+  assert.equal(settings.success, true);
+  assert.equal(evaluate.success, true);
 });

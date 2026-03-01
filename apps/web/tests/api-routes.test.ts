@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 
 import { POST as createGuest } from "../app/api/v1/auth/guest/route";
+import { POST as createGoogleSession } from "../app/api/v1/auth/google/session/route";
 import { POST as createBodyMetric, PATCH as updateBodyMetric } from "../app/api/v1/body-metrics/route";
 import { GET as getCalendarDay } from "../app/api/v1/calendar/day/route";
 import { GET as getBootstrap } from "../app/api/v1/bootstrap/route";
 import { GET as getDashboard } from "../app/api/v1/dashboard/route";
 import { POST as upsertGoal } from "../app/api/v1/goals/route";
+import { POST as upgradeGoogleSession } from "../app/api/v1/auth/upgrade/google/route";
 import { POST as createMeal, PATCH as updateMeal } from "../app/api/v1/meal-logs/quick/route";
 import { POST as createMealCheckin } from "../app/api/v1/meal-checkins/route";
 import { PATCH as patchMealCheckin, DELETE as deleteMealCheckin } from "../app/api/v1/meal-checkins/[id]/route";
+import { GET as evaluateReminder } from "../app/api/v1/reminders/evaluate/route";
+import { GET as getReminderSettings, POST as saveReminderSettings } from "../app/api/v1/reminders/settings/route";
 import { GET as getMealTemplates, POST as createMealTemplate } from "../app/api/v1/templates/meals/route";
 import {
   PATCH as patchMealTemplate,
@@ -58,6 +62,48 @@ test("POST /v1/auth/guest creates a guest session", async () => {
   const payload = (await response.json()) as { data: { sessionId: string; userId: string } };
   assert.equal(typeof payload.data.sessionId, "string");
   assert.equal(typeof payload.data.userId, "string");
+});
+
+test("POST /v1/auth/upgrade/google upgrades session and POST /v1/auth/google/session restores it", async () => {
+  const session = await makeSession();
+
+  const upgradedResponse = await upgradeGoogleSession(
+    new Request("http://localhost/api/v1/auth/upgrade/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        idToken: "test:google-sub-1:user1@example.com",
+        platform: "web"
+      })
+    })
+  );
+
+  assert.equal(upgradedResponse.status, 200);
+  const upgradedPayload = (await upgradedResponse.json()) as {
+    data: { isGuest: boolean; authProvider?: string; providerSubject?: string; email?: string };
+  };
+  assert.equal(upgradedPayload.data.isGuest, false);
+  assert.equal(upgradedPayload.data.authProvider, "google");
+  assert.equal(upgradedPayload.data.providerSubject, "google-sub-1");
+  assert.equal(upgradedPayload.data.email, "user1@example.com");
+
+  const restoredResponse = await createGoogleSession(
+    new Request("http://localhost/api/v1/auth/google/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idToken: "test:google-sub-1:user1@example.com",
+        platform: "android"
+      })
+    })
+  );
+  assert.equal(restoredResponse.status, 200);
+  const restoredPayload = (await restoredResponse.json()) as {
+    data: { userId: string; authProvider?: string };
+  };
+  assert.equal(restoredPayload.data.userId, session.userId);
+  assert.equal(restoredPayload.data.authProvider, "google");
 });
 
 test("GET /v1/dashboard without sessionId returns 400", async () => {
@@ -560,6 +606,72 @@ test("meal/workout template CRUD routes work", async () => {
   assert.equal(deletedWorkoutTemplate.status, 200);
 });
 
+test("GET/POST /v1/reminders/settings and GET /v1/reminders/evaluate work", async () => {
+  const session = await makeSession();
+
+  const saveResponse = await saveReminderSettings(
+    new Request("http://localhost/api/v1/reminders/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        isEnabled: true,
+        dailyReminderTime: "20:00",
+        missingLogReminderTime: "21:30",
+        channels: ["web_in_app", "mobile_local"],
+        timezone: "Asia/Seoul"
+      })
+    })
+  );
+  assert.equal(saveResponse.status, 201);
+
+  const settingsResponse = await getReminderSettings(
+    new Request(`http://localhost/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`)
+  );
+  assert.equal(settingsResponse.status, 200);
+  const settingsPayload = (await settingsResponse.json()) as {
+    data: { settings: { isEnabled: boolean; channels: string[] } | null };
+  };
+  assert.equal(settingsPayload.data.settings?.isEnabled, true);
+  assert.deepEqual(settingsPayload.data.settings?.channels, ["web_in_app", "mobile_local"]);
+
+  const missingResponse = await evaluateReminder(
+    new Request(
+      `http://localhost/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(session.sessionId)}&date=2026-03-01`
+    )
+  );
+  assert.equal(missingResponse.status, 200);
+  const missingPayload = (await missingResponse.json()) as {
+    data: { isMissingLogCandidate: boolean };
+  };
+  assert.equal(missingPayload.data.isMissingLogCandidate, true);
+
+  await createMealCheckin(
+    new Request("http://localhost/api/v1/meal-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        slot: "breakfast",
+        completed: true
+      })
+    })
+  );
+
+  const afterMealResponse = await evaluateReminder(
+    new Request(
+      `http://localhost/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(session.sessionId)}&date=2026-03-01`
+    )
+  );
+  assert.equal(afterMealResponse.status, 200);
+  const afterMealPayload = (await afterMealResponse.json()) as {
+    data: { isMissingLogCandidate: boolean; mealCount: number };
+  };
+  assert.equal(afterMealPayload.data.isMissingLogCandidate, false);
+  assert.equal(afterMealPayload.data.mealCount, 1);
+});
+
 test("GET /v1/bootstrap returns view-scoped payload and supports missing session", async () => {
   const noSessionResponse = await getBootstrap(new Request("http://localhost/api/v1/bootstrap?view=dashboard&range=7d"));
   assert.equal(noSessionResponse.status, 200);
@@ -617,4 +729,17 @@ test("GET /v1/bootstrap returns view-scoped payload and supports missing session
   assert.equal(Array.isArray(recordsPayload.data.mealTemplates), true);
   assert.equal(Array.isArray(recordsPayload.data.workoutTemplates), true);
   assert.equal(typeof recordsPayload.data.fetchedAt, "string");
+
+  const settingsResponse = await getBootstrap(
+    new Request(
+      `http://localhost/api/v1/bootstrap?sessionId=${encodeURIComponent(session.sessionId)}&view=settings&date=2026-03-01&range=7d`
+    )
+  );
+  assert.equal(settingsResponse.status, 200);
+  const settingsPayload = (await settingsResponse.json()) as {
+    data: {
+      reminderSettings?: unknown;
+    };
+  };
+  assert.equal("reminderSettings" in settingsPayload.data, true);
 });

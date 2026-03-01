@@ -23,6 +23,7 @@ export const isoDateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}$/u, "Expected YYYY-MM-DD")
   .refine((value) => isValidIsoDate(value), "Invalid calendar date");
 const nonEmptyString = z.string().trim().min(1);
+const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "Expected HH:MM");
 
 export const rangeSchema = z.enum(["7d", "30d", "90d"]);
 
@@ -33,6 +34,17 @@ export const authGuestRequestSchema = z.object({
 export const authUpgradeRequestSchema = z.object({
   sessionId: nonEmptyString,
   email: z.string().email()
+});
+
+export const googleUpgradeRequestSchema = z.object({
+  sessionId: nonEmptyString,
+  idToken: nonEmptyString,
+  platform: z.enum(["web", "android"])
+});
+
+export const googleSessionRequestSchema = z.object({
+  idToken: nonEmptyString,
+  platform: z.enum(["web", "android"])
 });
 
 export const quickMealLogInputSchema = z.object({
@@ -214,7 +226,10 @@ export const bootstrapResponseSchema = z.object({
       isGuest: z.boolean(),
       createdAt: z.string(),
       upgradedAt: z.string().optional(),
-      email: z.string().email().optional()
+      email: z.string().email().optional(),
+      authProvider: z.enum(["guest", "google"]).optional(),
+      providerSubject: nonEmptyString.optional(),
+      avatarUrl: z.string().url().optional()
     })
     .nullable(),
   dashboard: z.unknown().optional(),
@@ -222,7 +237,28 @@ export const bootstrapResponseSchema = z.object({
   goal: z.unknown().nullable().optional(),
   mealTemplates: z.array(z.unknown()).optional(),
   workoutTemplates: z.array(z.unknown()).optional(),
+  reminderSettings: z.unknown().nullable().optional(),
   fetchedAt: z.string()
+});
+
+export const reminderChannelSchema = z.enum(["web_in_app", "web_push", "mobile_local"]);
+
+export const reminderSettingsQuerySchema = z.object({
+  sessionId: nonEmptyString
+});
+
+export const reminderSettingsInputSchema = z.object({
+  sessionId: nonEmptyString,
+  isEnabled: z.boolean(),
+  dailyReminderTime: hhmmSchema,
+  missingLogReminderTime: hhmmSchema,
+  channels: z.array(reminderChannelSchema).min(1),
+  timezone: nonEmptyString
+});
+
+export const reminderEvaluateQuerySchema = z.object({
+  sessionId: nonEmptyString,
+  date: isoDateSchema
 });
 
 export const workoutSuggestionQuerySchema = z.object({
@@ -298,6 +334,8 @@ export function formatZodIssues(error: z.ZodError): string[] {
 
 export type AuthGuestRequest = z.infer<typeof authGuestRequestSchema>;
 export type AuthUpgradeRequest = z.infer<typeof authUpgradeRequestSchema>;
+export type GoogleUpgradeRequest = z.infer<typeof googleUpgradeRequestSchema>;
+export type GoogleSessionRequest = z.infer<typeof googleSessionRequestSchema>;
 export type QuickMealLogRequest = z.infer<typeof quickMealLogInputSchema>;
 export type MealCheckinRequest = z.infer<typeof mealCheckinInputSchema>;
 export type MealCheckinUpdateRequest = z.infer<typeof mealCheckinUpdateSchema>;
@@ -319,3 +357,6 @@ export type MealTemplateRequest = z.infer<typeof mealTemplateInputSchema>;
 export type MealTemplateUpdateRequest = z.infer<typeof mealTemplateUpdateSchema>;
 export type WorkoutTemplateRequest = z.infer<typeof workoutTemplateInputSchema>;
 export type WorkoutTemplateUpdateRequest = z.infer<typeof workoutTemplateUpdateSchema>;
+export type ReminderSettingsQuery = z.infer<typeof reminderSettingsQuerySchema>;
+export type ReminderSettingsRequest = z.infer<typeof reminderSettingsInputSchema>;
+export type ReminderEvaluateQuery = z.infer<typeof reminderEvaluateQuerySchema>;

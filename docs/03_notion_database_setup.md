@@ -17,8 +17,10 @@
 ### .env / Vercel 환경변수 추가
 - `NOTION_DB_MEAL_TEMPLATES`
 - `NOTION_DB_WORKOUT_TEMPLATES`
+- `NOTION_DB_REMINDER_SETTINGS`
 
 템플릿 관리 기능(`/settings` 템플릿 CRUD)을 사용하려면 위 2개를 반드시 설정해야 합니다.
+S4 리마인더 기능을 사용하려면 `NOTION_DB_REMINDER_SETTINGS`가 필요합니다.
 
 1. Notion에서 `Internal Integration` 생성
 - Integration 생성 후 `Internal Integration Token` 확보
@@ -31,6 +33,7 @@
 - `RoutineMate Goals`
 - `RoutineMate MealTemplates`
 - `RoutineMate WorkoutTemplates`
+- `RoutineMate ReminderSettings`
 
 3. 각 데이터베이스를 Integration에 공유
 - DB 우측 상단 `...` -> `Connections` -> 생성한 Integration 연결
@@ -48,6 +51,11 @@
 - `NOTION_DB_GOALS=...`
 - `NOTION_DB_MEAL_TEMPLATES=...`
 - `NOTION_DB_WORKOUT_TEMPLATES=...`
+- `NOTION_DB_REMINDER_SETTINGS=...`
+- `GOOGLE_WEB_CLIENT_ID=...`
+- `GOOGLE_ANDROID_CLIENT_ID=...`
+- `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...`
+- `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...`
 
 ---
 
@@ -67,6 +75,9 @@
 | `Email` | `Email` | N | 업그레이드 후 이메일 |
 | `CreatedAt` | `Date` | Y | 세션 생성 시각 |
 | `UpgradedAt` | `Date` | N | 계정 업그레이드 시각 |
+| `AuthProvider` | `Select` | N | `guest` 또는 `google` |
+| `ProviderSubject` | `Rich text` | N | Google `sub` 식별자 |
+| `AvatarUrl` | `URL` | N | Google 프로필 이미지 URL |
 
 ## Meals DB (`NOTION_DB_MEALS`)
 
@@ -200,6 +211,21 @@
 참고:
 - `FoodLabel`은 현재 하위호환용 optional 필드입니다.
 - 다만 과거 데이터/호환성을 위해 컬럼을 남겨두는 것은 권장합니다.
+
+## 6-1) ReminderSettings DB (신규)
+
+| 컬럼명 | 타입(Notion) | 필수 | 설명 |
+|---|---|---|---|
+| `Name` | `Title` | Y | 고정값 `ReminderSettings` |
+| `Id` | `Rich text` | Y | 설정 id |
+| `UserId` | `Rich text` | Y | 사용자 식별자 |
+| `IsEnabled` | `Checkbox` | Y | 리마인더 활성화 여부 |
+| `DailyReminderTime` | `Rich text` | Y | `HH:MM` |
+| `MissingLogReminderTime` | `Rich text` | Y | `HH:MM` |
+| `Channels` | `Rich text` | Y | `web_in_app,mobile_local` 같은 CSV |
+| `Timezone` | `Rich text` | Y | 예: `Asia/Seoul` |
+| `CreatedAt` | `Date` | Y | 생성 시각 |
+| `UpdatedAt` | `Date` | Y | 마지막 변경 시각 |
 
 ## 7) 자동 점검 스크립트
 

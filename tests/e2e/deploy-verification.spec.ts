@@ -52,6 +52,8 @@ test("production settings page supports goal/template actions and hides internal
 
   await expect(page.getByText("목표를 저장했습니다.")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Notion integration is not configured")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "리마인더 설정" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Google로 계정 전환" })).toBeVisible();
 
   const mealArticle = page.locator("article", {
     has: page.getByRole("heading", { name: "식단 템플릿" })

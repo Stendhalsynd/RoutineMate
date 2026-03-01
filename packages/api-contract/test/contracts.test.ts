@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   bootstrapQuerySchema,
   bootstrapResponseSchema,
+  googleSessionRequestSchema,
+  googleUpgradeRequestSchema,
   bodyMetricUpdateSchema,
   calendarRangeQuerySchema,
   calendarDayQuerySchema,
@@ -14,6 +16,8 @@ import {
   quickMealLogUpdateSchema,
   quickWorkoutLogInputSchema,
   quickWorkoutLogUpdateSchema,
+  reminderEvaluateQuerySchema,
+  reminderSettingsInputSchema,
   softDeleteSchema,
   workoutTemplateInputSchema
 } from "../src/index";
@@ -158,4 +162,35 @@ test("bootstrapResponseSchema accepts nullable session payload", () => {
     fetchedAt: "2026-03-01T12:00:00.000Z"
   });
   assert.equal(result.success, true);
+});
+
+test("google auth schemas accept web/android payloads", () => {
+  const upgrade = googleUpgradeRequestSchema.safeParse({
+    sessionId: "sess-1",
+    idToken: "token",
+    platform: "web"
+  });
+  const session = googleSessionRequestSchema.safeParse({
+    idToken: "token",
+    platform: "android"
+  });
+  assert.equal(upgrade.success, true);
+  assert.equal(session.success, true);
+});
+
+test("reminder schemas validate configuration and evaluation query", () => {
+  const settings = reminderSettingsInputSchema.safeParse({
+    sessionId: "sess-1",
+    isEnabled: true,
+    dailyReminderTime: "19:30",
+    missingLogReminderTime: "21:00",
+    channels: ["web_in_app", "mobile_local"],
+    timezone: "Asia/Seoul"
+  });
+  const evaluate = reminderEvaluateQuerySchema.safeParse({
+    sessionId: "sess-1",
+    date: "2026-03-01"
+  });
+  assert.equal(settings.success, true);
+  assert.equal(evaluate.success, true);
 });

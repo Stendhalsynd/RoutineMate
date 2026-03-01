@@ -72,6 +72,7 @@ export async function GET(request: Request) {
       goal?: Awaited<ReturnType<typeof repo.listGoalsByUser>>[number] | null;
       mealTemplates?: Awaited<ReturnType<typeof repo.listMealTemplatesByUser>>;
       workoutTemplates?: Awaited<ReturnType<typeof repo.listWorkoutTemplatesByUser>>;
+      reminderSettings?: Awaited<ReturnType<typeof repo.getReminderSettings>> | null;
     } = {
       session,
       fetchedAt
@@ -120,23 +121,27 @@ export async function GET(request: Request) {
         workoutLogs,
         bodyMetrics
       };
-      const [mealTemplates, workoutTemplates] = await Promise.all([
+      const [mealTemplates, workoutTemplates, reminderSettings] = await Promise.all([
         repo.listMealTemplatesByUser(session.userId),
-        repo.listWorkoutTemplatesByUser(session.userId)
+        repo.listWorkoutTemplatesByUser(session.userId),
+        repo.getReminderSettings(session.userId)
       ]);
       payload.mealTemplates = mealTemplates;
       payload.workoutTemplates = workoutTemplates;
+      payload.reminderSettings = reminderSettings;
     }
 
     if (parsed.data.view === "settings") {
-      const [goals, mealTemplates, workoutTemplates] = await Promise.all([
+      const [goals, mealTemplates, workoutTemplates, reminderSettings] = await Promise.all([
         repo.listGoalsByUser(session.userId),
         repo.listMealTemplatesByUser(session.userId),
-        repo.listWorkoutTemplatesByUser(session.userId)
+        repo.listWorkoutTemplatesByUser(session.userId),
+        repo.getReminderSettings(session.userId)
       ]);
       payload.goal = goals[0] ?? null;
       payload.mealTemplates = mealTemplates;
       payload.workoutTemplates = workoutTemplates;
+      payload.reminderSettings = reminderSettings;
     }
 
     if (parsed.data.view === "dashboard") {

@@ -11,6 +11,8 @@ export type RangeKey = "7d" | "30d" | "90d";
 export type DashboardGranularity = "day" | "week" | "month";
 export type WorkspaceView = "dashboard" | "records" | "settings";
 export type UiRangeLabel = "day" | "week" | "month";
+export type ReminderChannel = "web_in_app" | "web_push" | "mobile_local";
+export type AuthProvider = "guest" | "google";
 
 export interface ScoringPolicy {
   dietWeight: number;
@@ -77,6 +79,9 @@ export interface Session {
   createdAt: string;
   upgradedAt?: string;
   email?: string;
+  authProvider?: AuthProvider;
+  providerSubject?: string;
+  avatarUrl?: string;
 }
 
 export interface DeleteMeta {
@@ -240,6 +245,7 @@ export interface BootstrapPayload {
   goal?: Goal | null;
   mealTemplates?: MealTemplate[];
   workoutTemplates?: WorkoutTemplate[];
+  reminderSettings?: ReminderSettings | null;
   fetchedAt: string;
 }
 
@@ -249,6 +255,33 @@ export interface OptimisticState {
 }
 
 export type QuickLogSource = "manual" | "copied_yesterday" | "copied_recent";
+
+export interface ReminderSettings {
+  id: string;
+  userId: string;
+  isEnabled: boolean;
+  dailyReminderTime: string;
+  missingLogReminderTime: string;
+  channels: ReminderChannel[];
+  timezone: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReminderEvaluation {
+  date: string;
+  mealCount: number;
+  workoutCount: number;
+  bodyMetricCount: number;
+  isMissingLogCandidate: boolean;
+}
+
+export interface GoogleProfile {
+  sub: string;
+  email: string;
+  name?: string;
+  picture?: string;
+}
 
 export interface WorkoutSuggestion {
   bodyPart: BodyPart;

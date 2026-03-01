@@ -234,3 +234,30 @@
 - 템플릿 인라인 수정 후 설정/기록 페이지 동시 반영
 - 저장 실패 시 낙관적 상태 롤백
 - 대시보드 토글 라벨/집계 단위 정합성 유지
+
+---
+
+## 9) S4 스프린트 (S4-1 ~ S4-4)
+
+### S4-1 리마인더/미기록 감지
+- API: `GET/POST /v1/reminders/settings`, `GET /v1/reminders/evaluate`
+- 정책: 고정 시간 + 미기록 감지(당일 meal/workout/bodyMetric 모두 0)
+- 저장: Notion `ReminderSettings` DB
+- 테스트: 설정 저장/재조회, 미기록 -> 기록 후 해제
+
+### S4-2 게스트 -> Google 업그레이드
+- API: `POST /v1/auth/upgrade/google`, `POST /v1/auth/google/session`, `GET /v1/auth/google/config`
+- 세션 필드 확장: `AuthProvider`, `ProviderSubject`, `AvatarUrl`
+- 테스트: 업그레이드 후 `isGuest=false`, 재로그인 시 동일 user 복원
+
+### S4-3 UX/성능/접근성 안정화
+- 캐시 우선 렌더 + 동기화 상태 표시
+- mutation 낙관 반영 유지 및 실패 롤백 강화
+- 버튼 간격 규칙 `action-gap-lg` 통일
+- 테스트: 페이지 이동 시 깜빡임 완화, 저장 즉시성 회귀 없음
+
+### S4-4 릴리즈 파이프라인(웹+APK)
+- 웹: `deploy:prod:verify`
+- 모바일: `eas.json` 기반 `preview/release` APK 빌드
+- 릴리즈: GitHub Release APK 첨부 스크립트 + Discord CHANGELOG
+- 테스트: env 누락 시 명확 오류, 성공 시 산출물 업로드

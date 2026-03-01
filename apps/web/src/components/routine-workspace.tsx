@@ -11,6 +11,9 @@ import type {
   DaySnapshot,
   Goal,
   MealCheckin,
+  ReminderChannel,
+  ReminderEvaluation,
+  ReminderSettings,
   MealSlot,
   MealTemplate,
   RangeKey,
@@ -48,6 +51,14 @@ type BodyMetricForm = {
   date: string;
   weightKg: string;
   bodyFatPct: string;
+};
+
+type ReminderForm = {
+  isEnabled: boolean;
+  dailyReminderTime: string;
+  missingLogReminderTime: string;
+  channels: ReminderChannel[];
+  timezone: string;
 };
 
 const ranges: RangeKey[] = ["7d", "30d", "90d"];
@@ -106,6 +117,8 @@ const queryKeys = {
   dashboard: (sessionId: string, range: RangeKey) => ["dashboard", sessionId, range] as const,
   day: (sessionId: string, date: string) => ["day", sessionId, date] as const,
   goal: (sessionId: string) => ["goal", sessionId] as const,
+  reminderSettings: (sessionId: string) => ["reminderSettings", sessionId] as const,
+  reminderEval: (sessionId: string, date: string) => ["reminderEval", sessionId, date] as const,
   mealTemplates: (sessionId: string) => ["mealTemplates", sessionId] as const,
   workoutTemplates: (sessionId: string) => ["workoutTemplates", sessionId] as const
 };
@@ -243,6 +256,47 @@ async function fetchWorkoutTemplates(sessionId: string): Promise<WorkoutTemplate
   return payload.data?.templates ?? [];
 }
 
+async function fetchReminderSettings(sessionId: string): Promise<ReminderSettings | null> {
+  const response = await fetch(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "리마인더 설정 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: { settings?: ReminderSettings | null } };
+  return payload.data?.settings ?? null;
+}
+
+async function fetchReminderEvaluation(sessionId: string, date: string): Promise<ReminderEvaluation> {
+  const response = await fetch(
+    `/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(sessionId)}&date=${encodeURIComponent(date)}`
+  );
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "리마인더 평가 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: ReminderEvaluation };
+  return (
+    payload.data ?? {
+      date,
+      mealCount: 0,
+      workoutCount: 0,
+      bodyMetricCount: 0,
+      isMissingLogCandidate: true
+    }
+  );
+}
+
+async function fetchGoogleWebClientId(): Promise<string> {
+  const response = await fetch("/api/v1/auth/google/config");
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "Google OAuth 구성이 누락되었습니다."));
+  }
+  const payload = (await response.json()) as { data?: { webClientId?: string } };
+  const clientId = payload.data?.webClientId;
+  if (!clientId) {
+    throw new Error("Google OAuth 클라이언트 ID를 찾을 수 없습니다.");
+  }
+  return clientId;
+}
+
 async function fetchBootstrap(
   sessionId: string,
   view: WorkspaceView,
@@ -264,6 +318,98 @@ async function fetchBootstrap(
       fetchedAt: new Date().toISOString()
     }
   );
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential?: string }) => void;
+            ux_mode?: "popup" | "redirect";
+          }) => void;
+          prompt: (listener?: (notification: { isNotDisplayed?: () => boolean; isSkippedMoment?: () => boolean }) => void) => void;
+        };
+      };
+    };
+  }
+}
+
+let googleScriptPromise: Promise<void> | null = null;
+
+function ensureGoogleScriptLoaded(): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("브라우저 환경에서만 Google OAuth를 사용할 수 있습니다."));
+  }
+  if (window.google?.accounts?.id) {
+    return Promise.resolve();
+  }
+  if (googleScriptPromise) {
+    return googleScriptPromise;
+  }
+
+  googleScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Google 스크립트를 불러오지 못했습니다."));
+    document.head.appendChild(script);
+  });
+
+  return googleScriptPromise;
+}
+
+async function requestGoogleCredential(clientId: string): Promise<string> {
+  await ensureGoogleScriptLoaded();
+
+  return new Promise((resolve, reject) => {
+    const api = window.google?.accounts?.id;
+    if (!api) {
+      reject(new Error("Google OAuth API를 찾을 수 없습니다."));
+      return;
+    }
+
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error("Google 인증 팝업이 응답하지 않았습니다."));
+    }, 15_000);
+
+    api.initialize({
+      client_id: clientId,
+      ux_mode: "popup",
+      callback: (response) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeoutId);
+        if (!response.credential) {
+          reject(new Error("Google 인증 토큰을 가져오지 못했습니다."));
+          return;
+        }
+        resolve(response.credential);
+      }
+    });
+
+    api.prompt((notification) => {
+      if (settled) {
+        return;
+      }
+      if (notification.isNotDisplayed?.() || notification.isSkippedMoment?.()) {
+        settled = true;
+        window.clearTimeout(timeoutId);
+        reject(new Error("Google 인증 UI를 표시하지 못했습니다."));
+      }
+    });
+  });
 }
 
 export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
@@ -341,6 +487,15 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     defaultDuration: "30"
   });
 
+  const [reminderForm, setReminderForm] = useState<ReminderForm>({
+    isEnabled: true,
+    dailyReminderTime: "20:00",
+    missingLogReminderTime: "21:30",
+    channels: ["web_in_app", "mobile_local"],
+    timezone: "Asia/Seoul"
+  });
+  const [isGoogleUpgrading, setIsGoogleUpgrading] = useState(false);
+
   const sessionQuery = useQuery({
     queryKey: queryKeys.session,
     queryFn: fetchSession,
@@ -387,11 +542,25 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     placeholderData: (previous) => previous
   });
 
+  const reminderSettingsQuery = useQuery({
+    queryKey: queryKeys.reminderSettings(sessionId ?? ""),
+    queryFn: () => fetchReminderSettings(sessionId!),
+    enabled: Boolean(sessionId) && (view === "settings" || view === "records"),
+    placeholderData: (previous) => previous
+  });
+
+  const reminderEvaluationQuery = useQuery({
+    queryKey: queryKeys.reminderEval(sessionId ?? "", selectedDate),
+    queryFn: () => fetchReminderEvaluation(sessionId!, selectedDate),
+    enabled: Boolean(sessionId) && view === "records",
+    placeholderData: (previous) => previous
+  });
+
   const bootstrapQuery = useQuery({
     queryKey: queryKeys.bootstrap(sessionId ?? "", view, selectedDate, range),
     queryFn: () => fetchBootstrap(sessionId!, view, selectedDate, range),
     enabled: Boolean(sessionId),
-    staleTime: 5_000,
+    staleTime: 30_000,
     placeholderData: (previous) => previous
   });
 
@@ -417,16 +586,29 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   }, [dayQuery.error]);
 
   useEffect(() => {
-    if (!(mealTemplatesQuery.error instanceof Error) && !(workoutTemplatesQuery.error instanceof Error) && !(goalQuery.error instanceof Error)) {
+    if (!(reminderEvaluationQuery.error instanceof Error)) {
+      return;
+    }
+    setRecordsMessage({ type: "error", text: reminderEvaluationQuery.error.message });
+  }, [reminderEvaluationQuery.error]);
+
+  useEffect(() => {
+    if (
+      !(mealTemplatesQuery.error instanceof Error) &&
+      !(workoutTemplatesQuery.error instanceof Error) &&
+      !(goalQuery.error instanceof Error) &&
+      !(reminderSettingsQuery.error instanceof Error)
+    ) {
       return;
     }
     const message =
       (mealTemplatesQuery.error instanceof Error && mealTemplatesQuery.error.message) ||
       (workoutTemplatesQuery.error instanceof Error && workoutTemplatesQuery.error.message) ||
+      (reminderSettingsQuery.error instanceof Error && reminderSettingsQuery.error.message) ||
       (goalQuery.error instanceof Error && goalQuery.error.message) ||
       "설정 데이터 조회에 실패했습니다.";
     setSettingsMessage({ type: "error", text: message });
-  }, [goalQuery.error, mealTemplatesQuery.error, workoutTemplatesQuery.error]);
+  }, [goalQuery.error, mealTemplatesQuery.error, workoutTemplatesQuery.error, reminderSettingsQuery.error]);
 
   useEffect(() => {
     if (!sessionId || !bootstrapQuery.data) {
@@ -447,6 +629,9 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     if (bootstrapQuery.data.workoutTemplates) {
       queryClient.setQueryData(queryKeys.workoutTemplates(sessionId), bootstrapQuery.data.workoutTemplates);
     }
+    if (bootstrapQuery.data.reminderSettings !== undefined) {
+      queryClient.setQueryData(queryKeys.reminderSettings(sessionId), bootstrapQuery.data.reminderSettings);
+    }
   }, [bootstrapQuery.data, queryClient, range, sessionId]);
 
   useEffect(() => {
@@ -459,6 +644,17 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const dayData = (dayQuery.data ?? defaultDaySnapshot(selectedDate)) as DaySnapshot;
   const mealTemplates = (mealTemplatesQuery.data ?? []) as MealTemplate[];
   const workoutTemplates = (workoutTemplatesQuery.data ?? []) as WorkoutTemplate[];
+  const reminderSettings = (reminderSettingsQuery.data ?? null) as ReminderSettings | null;
+  const reminderEvaluation = (reminderEvaluationQuery.data ?? null) as ReminderEvaluation | null;
+  const isSyncing =
+    sessionQuery.isFetching ||
+    bootstrapQuery.isFetching ||
+    dashboardQuery.isFetching ||
+    dayQuery.isFetching ||
+    goalQuery.isFetching ||
+    mealTemplatesQuery.isFetching ||
+    workoutTemplatesQuery.isFetching ||
+    reminderSettingsQuery.isFetching;
 
   const goalSyncRef = useRef<string>("");
   useEffect(() => {
@@ -484,6 +680,52 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       targetBodyFat: goal.targetBodyFat?.toString() ?? ""
     });
   }, [goal]);
+
+  const reminderSyncRef = useRef<string>("");
+  useEffect(() => {
+    if (!reminderSettings) {
+      return;
+    }
+    const syncKey = [
+      reminderSettings.id,
+      reminderSettings.isEnabled,
+      reminderSettings.dailyReminderTime,
+      reminderSettings.missingLogReminderTime,
+      reminderSettings.channels.join(","),
+      reminderSettings.timezone
+    ].join("|");
+    if (reminderSyncRef.current === syncKey) {
+      return;
+    }
+    reminderSyncRef.current = syncKey;
+    setReminderForm({
+      isEnabled: reminderSettings.isEnabled,
+      dailyReminderTime: reminderSettings.dailyReminderTime,
+      missingLogReminderTime: reminderSettings.missingLogReminderTime,
+      channels: reminderSettings.channels,
+      timezone: reminderSettings.timezone
+    });
+  }, [reminderSettings]);
+
+  const notifiedDateRef = useRef<string>("");
+  useEffect(() => {
+    if (view !== "records" || !reminderSettings?.isEnabled || !reminderEvaluation?.isMissingLogCandidate) {
+      return;
+    }
+    if (!reminderSettings.channels.includes("web_push")) {
+      return;
+    }
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+      return;
+    }
+    if (notifiedDateRef.current === reminderEvaluation.date) {
+      return;
+    }
+    notifiedDateRef.current = reminderEvaluation.date;
+    new Notification("RoutineMate 리마인더", {
+      body: `${reminderEvaluation.date} 기록이 비어 있습니다. 1탭으로 체크인해 주세요.`
+    });
+  }, [reminderEvaluation, reminderSettings, view]);
 
   const checkinBySlot = useMemo(() => {
     const map = new Map<MealSlot, MealCheckin>();
@@ -537,6 +779,114 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       queryKey: queryKeys.bootstrap(sid, view, selectedDate, range),
       queryFn: () => fetchBootstrap(sid, view, selectedDate, range)
     });
+  }
+
+  function toggleReminderChannel(channel: ReminderChannel): void {
+    setReminderForm((prev) => {
+      const exists = prev.channels.includes(channel);
+      const channels = exists ? prev.channels.filter((item) => item !== channel) : [...prev.channels, channel];
+      return {
+        ...prev,
+        channels: channels.length > 0 ? channels : [channel]
+      };
+    });
+  }
+
+  async function saveReminderSettingsAction(): Promise<void> {
+    if (!sessionId) {
+      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+
+    const key = queryKeys.reminderSettings(sessionId);
+    const previous = (queryClient.getQueryData(key) as ReminderSettings | null | undefined) ?? reminderSettings;
+    const optimistic: ReminderSettings = {
+      id: previous?.id ?? `tmp-reminder-${Date.now()}`,
+      userId: session?.userId ?? "temp-user",
+      isEnabled: reminderForm.isEnabled,
+      dailyReminderTime: reminderForm.dailyReminderTime,
+      missingLogReminderTime: reminderForm.missingLogReminderTime,
+      channels: reminderForm.channels,
+      timezone: reminderForm.timezone.trim() || "Asia/Seoul",
+      createdAt: previous?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    queryClient.setQueryData(key, optimistic);
+    setSettingsMessage({ type: "info", text: "리마인더 설정을 저장 중입니다..." });
+
+    const response = await fetch("/api/v1/reminders/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        isEnabled: reminderForm.isEnabled,
+        dailyReminderTime: reminderForm.dailyReminderTime,
+        missingLogReminderTime: reminderForm.missingLogReminderTime,
+        channels: reminderForm.channels,
+        timezone: reminderForm.timezone.trim() || "Asia/Seoul"
+      })
+    });
+
+    if (!response.ok) {
+      queryClient.setQueryData(key, previous ?? null);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "리마인더 설정 저장에 실패했습니다.") });
+      return;
+    }
+
+    const payload = (await response.json()) as { data?: ReminderSettings };
+    if (payload.data) {
+      queryClient.setQueryData(key, payload.data);
+    }
+
+    if (reminderForm.channels.includes("web_push") && typeof Notification !== "undefined") {
+      void Notification.requestPermission();
+    }
+
+    setSettingsMessage({ type: "success", text: "리마인더 설정을 저장했습니다." });
+  }
+
+  async function upgradeWithGoogle(): Promise<void> {
+    if (!sessionId) {
+      setSettingsMessage({ type: "error", text: "먼저 게스트 세션을 시작해 주세요." });
+      return;
+    }
+    if (isGoogleUpgrading) {
+      return;
+    }
+
+    setIsGoogleUpgrading(true);
+    try {
+      const clientId = await fetchGoogleWebClientId();
+      const idToken = await requestGoogleCredential(clientId);
+      const response = await fetch("/api/v1/auth/upgrade/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          idToken,
+          platform: "web"
+        })
+      });
+
+      if (!response.ok) {
+        setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "Google 계정 전환에 실패했습니다.") });
+        return;
+      }
+
+      const payload = (await response.json()) as { data?: Session };
+      if (payload.data) {
+        queryClient.setQueryData(queryKeys.session, payload.data);
+      }
+      setSettingsMessage({ type: "success", text: "Google 계정으로 전환되었습니다." });
+    } catch (error) {
+      setSettingsMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Google 계정 전환에 실패했습니다."
+      });
+    } finally {
+      setIsGoogleUpgrading(false);
+    }
   }
 
   function applyDayOptimistic(next: DaySnapshot): void {
@@ -619,6 +969,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function deleteMealCheckin(slot: MealSlot): Promise<void> {
@@ -652,6 +1003,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
     setRecordsMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function saveWorkoutLog(payload?: WorkoutTemplate): Promise<void> {
@@ -732,6 +1084,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     setWorkoutForm((prev) => ({ ...prev, exerciseName: "" }));
     setRecordsMessage({ type: "success", text: "운동을 저장했습니다." });
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function deleteWorkoutLog(id: string): Promise<void> {
@@ -760,6 +1113,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
     setRecordsMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function saveBodyMetric(): Promise<void> {
@@ -820,6 +1174,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
     setRecordsMessage({ type: "success", text: "체성분 기록을 저장했습니다." });
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function deleteBodyMetricLog(id: string): Promise<void> {
@@ -848,6 +1203,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
     setRecordsMessage({ type: "info", text: "체성분 기록을 삭제했습니다." });
     void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
   async function saveGoal(): Promise<void> {
@@ -1212,10 +1568,17 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
               </button>
             </>
           ) : (
-            <p className="session-badge">{session ? "세션 연결됨" : "세션 시작은 설정 페이지에서"}</p>
+            <>
+              <p className="session-badge">{session ? "세션 연결됨" : "세션 시작은 설정 페이지에서"}</p>
+              <p className="session-badge">{isSyncing ? "동기화 중..." : "동기화 완료"}</p>
+            </>
           )}
         </div>
-        {sessionMessage ? <p className={`status status-${sessionMessage.type}`}>{sessionMessage.text}</p> : null}
+        {sessionMessage ? (
+          <p className={`status status-${sessionMessage.type}`} aria-live="polite">
+            {sessionMessage.text}
+          </p>
+        ) : null}
       </section>
 
       {view === "dashboard" ? (
@@ -1237,7 +1600,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
             </div>
           </div>
 
-          {dashboardMessage ? <p className={`status status-${dashboardMessage.type}`}>{dashboardMessage.text}</p> : null}
+          {dashboardMessage ? (
+            <p className={`status status-${dashboardMessage.type}`} aria-live="polite">
+              {dashboardMessage.text}
+            </p>
+          ) : null}
 
           <div className="kpi-grid">
             <article className="kpi-card">
@@ -1309,7 +1676,16 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 />
               </label>
             </div>
-            {recordsMessage ? <p className={`status status-${recordsMessage.type}`}>{recordsMessage.text}</p> : null}
+            {recordsMessage ? (
+              <p className={`status status-${recordsMessage.type}`} aria-live="polite">
+                {recordsMessage.text}
+              </p>
+            ) : null}
+            {reminderSettings?.isEnabled && reminderEvaluation?.isMissingLogCandidate ? (
+              <p className="status status-info" aria-live="polite">
+                미기록 상태입니다. 오늘 기록을 1건만 추가해도 경고가 해제됩니다.
+              </p>
+            ) : null}
           </section>
 
           <section className="card">
@@ -1460,7 +1836,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width action-gap" onClick={() => void saveWorkoutLog()}>
+              <button
+                type="button"
+                className="button button-primary full-width action-gap-lg"
+                onClick={() => void saveWorkoutLog()}
+              >
                 운동 저장
               </button>
             </article>
@@ -1493,7 +1873,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width action-gap" onClick={() => void saveBodyMetric()}>
+              <button
+                type="button"
+                className="button button-primary full-width action-gap-lg"
+                onClick={() => void saveBodyMetric()}
+              >
                 체성분 저장
               </button>
             </article>
@@ -1555,7 +1939,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
             <article>
               <h2>목표 설정</h2>
               <p className="hint">목표는 설정 페이지에서만 관리하고, 대시보드에서는 읽기 전용으로 표시합니다.</p>
-              {settingsMessage ? <p className={`status status-${settingsMessage.type}`}>{settingsMessage.text}</p> : null}
+              {settingsMessage ? (
+                <p className={`status status-${settingsMessage.type}`} aria-live="polite">
+                  {settingsMessage.text}
+                </p>
+              ) : null}
               <div className="form-grid">
                 <label className="field">
                   <span>주간 루틴 목표(회)</span>
@@ -1594,6 +1982,105 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
               </div>
               <button type="button" className="button button-primary full-width settings-submit" onClick={() => void saveGoal()}>
                 목표 저장
+              </button>
+            </article>
+          </section>
+
+          <section className="card split-grid settings-template-grid">
+            <article>
+              <h2>계정 전환</h2>
+              <p className="hint">게스트로 시작한 데이터를 Google 계정으로 전환하면 다른 기기에서도 복원할 수 있습니다.</p>
+              <button
+                type="button"
+                className="button button-primary full-width settings-submit"
+                disabled={!session || isGoogleUpgrading}
+                onClick={() => void upgradeWithGoogle()}
+              >
+                {isGoogleUpgrading ? "Google 인증 중..." : "Google로 계정 전환"}
+              </button>
+              <p className="hint">
+                현재 상태:{" "}
+                {session?.authProvider === "google"
+                  ? `Google 연결됨 (${session.email ?? "이메일 없음"})`
+                  : session
+                    ? "게스트 세션"
+                    : "세션 없음"}
+              </p>
+            </article>
+
+            <article>
+              <h2>리마인더 설정</h2>
+              <p className="hint">고정 알림 + 미기록 감지 알림을 함께 사용합니다.</p>
+              <div className="form-grid">
+                <label className="field full-span">
+                  <span>활성화</span>
+                  <select
+                    value={reminderForm.isEnabled ? "on" : "off"}
+                    onChange={(event) => setReminderForm((prev) => ({ ...prev, isEnabled: event.target.value === "on" }))}
+                  >
+                    <option value="on">사용</option>
+                    <option value="off">미사용</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>일일 알림 시간</span>
+                  <input
+                    type="time"
+                    value={reminderForm.dailyReminderTime}
+                    onChange={(event) =>
+                      setReminderForm((prev) => ({ ...prev, dailyReminderTime: event.target.value || "20:00" }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>미기록 감지 시간</span>
+                  <input
+                    type="time"
+                    value={reminderForm.missingLogReminderTime}
+                    onChange={(event) =>
+                      setReminderForm((prev) => ({ ...prev, missingLogReminderTime: event.target.value || "21:30" }))
+                    }
+                  />
+                </label>
+                <label className="field full-span">
+                  <span>타임존</span>
+                  <input
+                    type="text"
+                    value={reminderForm.timezone}
+                    onChange={(event) => setReminderForm((prev) => ({ ...prev, timezone: event.target.value }))}
+                    placeholder="Asia/Seoul"
+                  />
+                </label>
+              </div>
+              <div className="chip-row">
+                <button
+                  type="button"
+                  className={reminderForm.channels.includes("web_in_app") ? "recommend-chip is-selected" : "recommend-chip"}
+                  onClick={() => toggleReminderChannel("web_in_app")}
+                >
+                  인앱
+                </button>
+                <button
+                  type="button"
+                  className={reminderForm.channels.includes("web_push") ? "recommend-chip is-selected" : "recommend-chip"}
+                  onClick={() => toggleReminderChannel("web_push")}
+                >
+                  브라우저 푸시
+                </button>
+                <button
+                  type="button"
+                  className={reminderForm.channels.includes("mobile_local") ? "recommend-chip is-selected" : "recommend-chip"}
+                  onClick={() => toggleReminderChannel("mobile_local")}
+                >
+                  모바일 로컬
+                </button>
+              </div>
+              <button
+                type="button"
+                className="button button-primary full-width settings-submit"
+                onClick={() => void saveReminderSettingsAction()}
+              >
+                리마인더 저장
               </button>
             </article>
           </section>

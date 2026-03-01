@@ -12,6 +12,9 @@
     "test": "npm run test --workspaces --if-present && npm run test:unit",
     "test:unit": "node --test --import tsx tests/unit/*.test.ts",
     "build": "npm run build --workspaces --if-present",
+    "build:apk:preview": "bash scripts/build-apk.sh preview",
+    "build:apk:release": "bash scripts/build-apk.sh release",
+    "release:apk:github": "bash scripts/release-apk.sh",
     "notion:schema:check": "node scripts/check-notion-schema.mjs",
     "verify:deploy:prod": "npx playwright test --config=playwright.deploy.config.ts",
     "deploy:prod:verify": "bash scripts/deploy-and-verify.sh"

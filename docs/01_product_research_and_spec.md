@@ -254,3 +254,27 @@
 ### 대시보드 표기
 - 내부 범위값은 `7d/30d/90d`를 유지.
 - 사용자 노출 토글은 `Day/Week/Month` 라벨로 표시.
+
+---
+
+## 13) S4 확장 방향 (2026-03-01)
+
+### S4-1 리마인더 루프
+- 정책: `고정 시간 1회 + 미기록 감지 알림`.
+- 채널: `web_in_app`, `web_push`, `mobile_local`.
+- 저장: `ReminderSettings` 전용 DB로 사용자별 정책 관리.
+
+### S4-2 Google 계정 전환
+- 게스트 시작 후 설정 페이지에서 Google 계정으로 전환.
+- 세션 메타 확장: `AuthProvider`, `ProviderSubject`, `AvatarUrl`.
+- 동일 Google 계정 재로그인 시 기존 데이터 사용자로 복원.
+
+### S4-3 즉시 반영 UX
+- 페이지 이동 시 빈 상태 깜빡임을 줄이기 위해 캐시 우선 렌더를 유지.
+- 저장 버튼 공통 여백/상태 피드백 규칙을 통일.
+- 접근성: 상태 메시지 `aria-live`, 터치 타겟 44px+.
+
+### S4-4 웹+APK 동시 릴리즈
+- 웹: Vercel + Playwright 배포 검증 루프.
+- 모바일: EAS APK 빌드(`preview`, `release`) + GitHub Release 첨부.
+- 릴리즈 노트는 Discord webhook으로 동시 공유.

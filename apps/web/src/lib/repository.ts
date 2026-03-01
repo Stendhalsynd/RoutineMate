@@ -1,12 +1,17 @@
 import type {
+  AuthProvider,
   BodyMetric,
   BodyMetricInput,
+  GoogleProfile,
   Goal,
   GoalInput,
   MealLog,
   MealCheckin,
   MealCheckinInput,
   MealTemplate,
+  ReminderEvaluation,
+  ReminderSettings,
+  ReminderChannel,
   WorkoutTemplate,
   MealSlot,
   QuickMealLogInput,
@@ -40,6 +45,7 @@ type DataStore = {
   goals: Goal[];
   mealTemplates: MealTemplate[];
   workoutTemplates: WorkoutTemplate[];
+  reminderSettings: Map<string, ReminderSettings>;
 };
 
 const globalKey = "__routinemate_store__";
@@ -53,7 +59,8 @@ const store =
     bodyMetrics: [],
     goals: [],
     mealTemplates: [],
-    workoutTemplates: []
+    workoutTemplates: [],
+    reminderSettings: new Map<string, ReminderSettings>()
   };
 
 (globalThis as Record<string, unknown>)[globalKey] = store;
@@ -124,6 +131,12 @@ function dateProperty(value: string): Record<string, unknown> {
 function emailProperty(value: string): Record<string, unknown> {
   return {
     email: value
+  };
+}
+
+function urlProperty(value: string): Record<string, unknown> {
+  return {
+    url: value
   };
 }
 
@@ -217,6 +230,17 @@ function getEmail(page: NotionPage, key: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
+function getUrl(page: NotionPage, key: string): string | undefined {
+  const prop = propertyRecord(page)[key] as
+    | { type?: string; url?: string | null }
+    | undefined;
+  if (!prop || prop.type !== "url") {
+    return undefined;
+  }
+  const value = prop.url?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
 function getRichTextAny(page: NotionPage, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = getRichText(page, key);
@@ -281,6 +305,18 @@ function mapSession(page: NotionPage): Session | null {
   const email = getEmail(page, "Email");
   if (email) {
     session.email = email;
+  }
+  const authProvider = getSelect(page, "AuthProvider") as AuthProvider | undefined;
+  if (authProvider) {
+    session.authProvider = authProvider;
+  }
+  const providerSubject = getRichText(page, "ProviderSubject");
+  if (providerSubject) {
+    session.providerSubject = providerSubject;
+  }
+  const avatarUrl = getUrl(page, "AvatarUrl");
+  if (avatarUrl) {
+    session.avatarUrl = avatarUrl;
   }
   return session;
 }
@@ -487,6 +523,41 @@ function mapGoal(page: NotionPage): Goal | null {
   return goal;
 }
 
+function parseChannels(value: string | undefined): ReminderChannel[] {
+  if (!value) {
+    return ["web_in_app", "mobile_local"];
+  }
+  const parsed = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0) as ReminderChannel[];
+  if (parsed.length === 0) {
+    return ["web_in_app", "mobile_local"];
+  }
+  return parsed;
+}
+
+function mapReminderSettings(page: NotionPage): ReminderSettings | null {
+  const id = getRichText(page, "Id") ?? page.id;
+  const userId = getRichText(page, "UserId");
+  const createdAt = getDate(page, "CreatedAt");
+  const updatedAt = getDate(page, "UpdatedAt");
+  if (!userId || !createdAt || !updatedAt) {
+    return null;
+  }
+  return {
+    id,
+    userId,
+    isEnabled: getCheckbox(page, "IsEnabled") ?? true,
+    dailyReminderTime: getRichText(page, "DailyReminderTime") ?? "20:00",
+    missingLogReminderTime: getRichText(page, "MissingLogReminderTime") ?? "21:30",
+    channels: parseChannels(getRichText(page, "Channels")),
+    timezone: getRichText(page, "Timezone") ?? "Asia/Seoul",
+    createdAt,
+    updatedAt
+  };
+}
+
 async function findNotionUserPageById(
   databaseId: string,
   userId: string,
@@ -500,6 +571,55 @@ async function findNotionUserPageById(
       .map(toPage)
       .find((page) => (getRichText(page, "Id") ?? page.id) === recordId) ?? null;
   return target;
+}
+
+function getReminderSettingsDbId(): string {
+  const databases = getNotionDatabases();
+  if (!databases.reminderSettingsDbId) {
+    throw new Error("Notion integration is not configured. Missing env: NOTION_DB_REMINDER_SETTINGS");
+  }
+  return databases.reminderSettingsDbId;
+}
+
+function isUnknownNotionPropertyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("is not a property that exists") || message.includes("Could not find database property");
+}
+
+async function createSessionPageWithOptionalFields(
+  databaseId: string,
+  required: Record<string, unknown>,
+  optional: Record<string, unknown>
+): Promise<void> {
+  try {
+    await createDatabasePage(databaseId, {
+      ...required,
+      ...optional
+    });
+  } catch (error) {
+    if (!isUnknownNotionPropertyError(error)) {
+      throw error;
+    }
+    await createDatabasePage(databaseId, required);
+  }
+}
+
+async function updateSessionPageWithOptionalFields(
+  pageId: string,
+  required: Record<string, unknown>,
+  optional: Record<string, unknown>
+): Promise<void> {
+  try {
+    await updateDatabasePage(pageId, {
+      ...required,
+      ...optional
+    });
+  } catch (error) {
+    if (!isUnknownNotionPropertyError(error)) {
+      throw error;
+    }
+    await updateDatabasePage(pageId, required);
+  }
 }
 
 const schemaValidationKey = "__routinemate_schema_validation__";
@@ -600,6 +720,20 @@ async function ensureNotionSchemaValidated(): Promise<void> {
         "CreatedAt"
       ]);
     }
+    if (databases.reminderSettingsDbId) {
+      await validateDatabaseSchema("ReminderSettings", databases.reminderSettingsDbId, [
+        "Name",
+        "Id",
+        "UserId",
+        "IsEnabled",
+        "DailyReminderTime",
+        "MissingLogReminderTime",
+        "Channels",
+        "Timezone",
+        "CreatedAt",
+        "UpdatedAt"
+      ]);
+    }
   })();
   const guarded = promise.catch((error) => {
     delete (globalThis as Record<string, unknown>)[schemaValidationKey];
@@ -617,7 +751,8 @@ export const repo = {
         sessionId: createId("sess"),
         userId: createId("user"),
         isGuest: true,
-        createdAt: timestamp
+        createdAt: timestamp,
+        authProvider: "guest"
       };
       if (deviceId) {
         session.email = `${deviceId}@guest.local`;
@@ -632,16 +767,23 @@ export const repo = {
       sessionId: createId("sess"),
       userId: createId("user"),
       isGuest: true,
-      createdAt: nowIso()
+      createdAt: nowIso(),
+      authProvider: "guest"
     };
 
-    await createDatabasePage(databases.sessionsDbId, {
-      Name: titleProperty(session.sessionId),
-      UserId: richTextProperty(session.userId),
-      IsGuest: checkboxProperty(true),
-      CreatedAt: dateProperty(session.createdAt),
-      ...(deviceId ? { Email: emailProperty(`${deviceId}@guest.local`) } : {})
-    });
+    await createSessionPageWithOptionalFields(
+      databases.sessionsDbId,
+      {
+        Name: titleProperty(session.sessionId),
+        UserId: richTextProperty(session.userId),
+        IsGuest: checkboxProperty(true),
+        CreatedAt: dateProperty(session.createdAt),
+        ...(deviceId ? { Email: emailProperty(`${deviceId}@guest.local`) } : {})
+      },
+      {
+        AuthProvider: selectProperty("guest")
+      }
+    );
     return session;
   },
 
@@ -655,7 +797,8 @@ export const repo = {
         ...existing,
         isGuest: false,
         email,
-        upgradedAt: nowIso()
+        upgradedAt: nowIso(),
+        authProvider: existing.authProvider ?? "guest"
       };
       store.sessions.set(sessionId, upgraded);
       return upgraded;
@@ -674,11 +817,17 @@ export const repo = {
       return null;
     }
     const upgradedAt = nowIso();
-    await updateDatabasePage(page.id, {
-      IsGuest: checkboxProperty(false),
-      Email: emailProperty(email),
-      UpgradedAt: dateProperty(upgradedAt)
-    });
+    await updateSessionPageWithOptionalFields(
+      page.id,
+      {
+        IsGuest: checkboxProperty(false),
+        Email: emailProperty(email),
+        UpgradedAt: dateProperty(upgradedAt)
+      },
+      {
+        AuthProvider: selectProperty("guest")
+      }
+    );
     const mapped = mapSession(page);
     if (!mapped) {
       return null;
@@ -687,8 +836,162 @@ export const repo = {
       ...mapped,
       isGuest: false,
       email,
-      upgradedAt
+      upgradedAt,
+      authProvider: mapped.authProvider ?? "guest"
     };
+  },
+
+  async upgradeSessionWithGoogle(sessionId: string, profile: GoogleProfile): Promise<Session | null> {
+    if (isMemoryMode()) {
+      const existing = store.sessions.get(sessionId);
+      if (!existing) {
+        return null;
+      }
+      const upgraded: Session = {
+        ...existing,
+        isGuest: false,
+        email: profile.email,
+        upgradedAt: nowIso(),
+        authProvider: "google",
+        providerSubject: profile.sub,
+        ...(profile.picture ? { avatarUrl: profile.picture } : {})
+      };
+      store.sessions.set(sessionId, upgraded);
+      return upgraded;
+    }
+
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const result = await queryDatabasePages(databases.sessionsDbId, {
+      filter: {
+        property: "Name",
+        title: { equals: sessionId }
+      }
+    });
+    const page = result.map(toPage)[0];
+    if (!page) {
+      return null;
+    }
+    const upgradedAt = nowIso();
+    await updateSessionPageWithOptionalFields(
+      page.id,
+      {
+        IsGuest: checkboxProperty(false),
+        Email: emailProperty(profile.email),
+        UpgradedAt: dateProperty(upgradedAt)
+      },
+      {
+        AuthProvider: selectProperty("google"),
+        ProviderSubject: richTextProperty(profile.sub),
+        ...(profile.picture ? { AvatarUrl: urlProperty(profile.picture) } : {})
+      }
+    );
+
+    const mapped = mapSession(page);
+    if (!mapped) {
+      return null;
+    }
+    return {
+      ...mapped,
+      isGuest: false,
+      email: profile.email,
+      upgradedAt,
+      authProvider: "google",
+      providerSubject: profile.sub,
+      ...(profile.picture ? { avatarUrl: profile.picture } : {})
+    };
+  },
+
+  async createOrRestoreGoogleSession(profile: GoogleProfile): Promise<Session> {
+    if (isMemoryMode()) {
+      const found =
+        [...store.sessions.values()].find((item) => item.providerSubject === profile.sub && item.authProvider === "google") ??
+        null;
+      if (found) {
+        const restored = {
+          ...found,
+          email: profile.email,
+          ...(profile.picture ? { avatarUrl: profile.picture } : {})
+        };
+        store.sessions.set(restored.sessionId, restored);
+        return restored;
+      }
+      const session: Session = {
+        sessionId: createId("sess"),
+        userId: createId("user"),
+        isGuest: false,
+        createdAt: nowIso(),
+        upgradedAt: nowIso(),
+        email: profile.email,
+        authProvider: "google",
+        providerSubject: profile.sub,
+        ...(profile.picture ? { avatarUrl: profile.picture } : {})
+      };
+      store.sessions.set(session.sessionId, session);
+      return session;
+    }
+
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const result = await queryDatabasePages(databases.sessionsDbId, {
+      filter: {
+        property: "ProviderSubject",
+        rich_text: { equals: profile.sub }
+      }
+    });
+    const existingPage = result.map(toPage).find((page) => getSelect(page, "AuthProvider") === "google") ?? null;
+    if (existingPage) {
+      await updateSessionPageWithOptionalFields(
+        existingPage.id,
+        {
+          Email: emailProperty(profile.email)
+        },
+        {
+          ...(profile.picture ? { AvatarUrl: urlProperty(profile.picture) } : {})
+        }
+      );
+      const mappedExisting = mapSession(existingPage);
+      if (mappedExisting) {
+        return {
+          ...mappedExisting,
+          isGuest: false,
+          authProvider: "google",
+          providerSubject: profile.sub,
+          email: profile.email,
+          ...(profile.picture ? { avatarUrl: profile.picture } : {})
+        };
+      }
+    }
+
+    const session: Session = {
+      sessionId: createId("sess"),
+      userId: createId("user"),
+      isGuest: false,
+      createdAt: nowIso(),
+      upgradedAt: nowIso(),
+      email: profile.email,
+      authProvider: "google",
+      providerSubject: profile.sub,
+      ...(profile.picture ? { avatarUrl: profile.picture } : {})
+    };
+
+    await createSessionPageWithOptionalFields(
+      databases.sessionsDbId,
+      {
+        Name: titleProperty(session.sessionId),
+        UserId: richTextProperty(session.userId),
+        IsGuest: checkboxProperty(false),
+        Email: emailProperty(profile.email),
+        CreatedAt: dateProperty(session.createdAt),
+        UpgradedAt: dateProperty(session.upgradedAt ?? session.createdAt)
+      },
+      {
+        AuthProvider: selectProperty("google"),
+        ProviderSubject: richTextProperty(profile.sub),
+        ...(profile.picture ? { AvatarUrl: urlProperty(profile.picture) } : {})
+      }
+    );
+    return session;
   },
 
   async getSession(sessionId: string): Promise<Session | null> {
@@ -1344,6 +1647,109 @@ export const repo = {
     return updated !== null;
   },
 
+  async getReminderSettings(userId: string): Promise<ReminderSettings | null> {
+    if (isMemoryMode()) {
+      return store.reminderSettings.get(userId) ?? null;
+    }
+
+    await ensureNotionSchemaValidated();
+    const reminderDbId = getReminderSettingsDbId();
+    const pages = await queryDatabasePages(reminderDbId, {
+      filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "UpdatedAt", direction: "descending" }]
+    });
+    const settings =
+      pages
+        .map(toPage)
+        .map(mapReminderSettings)
+        .find((item) => item !== null) ?? null;
+    return settings;
+  },
+
+  async upsertReminderSettings(
+    userId: string,
+    input: Omit<ReminderSettings, "id" | "userId" | "createdAt" | "updatedAt">
+  ): Promise<ReminderSettings> {
+    if (isMemoryMode()) {
+      const existing = store.reminderSettings.get(userId);
+      const timestamp = nowIso();
+      const next: ReminderSettings = {
+        id: existing?.id ?? createId("remind"),
+        userId,
+        isEnabled: input.isEnabled,
+        dailyReminderTime: input.dailyReminderTime,
+        missingLogReminderTime: input.missingLogReminderTime,
+        channels: input.channels,
+        timezone: input.timezone,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp
+      };
+      store.reminderSettings.set(userId, next);
+      return next;
+    }
+
+    await ensureNotionSchemaValidated();
+    const reminderDbId = getReminderSettingsDbId();
+    const pages = await queryDatabasePages(reminderDbId, {
+      filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "UpdatedAt", direction: "descending" }]
+    });
+    const existingPage = pages.map(toPage)[0] ?? null;
+    const existing = existingPage ? mapReminderSettings(existingPage) : null;
+    const timestamp = nowIso();
+    const next: ReminderSettings = {
+      id: existing?.id ?? createId("remind"),
+      userId,
+      isEnabled: input.isEnabled,
+      dailyReminderTime: input.dailyReminderTime,
+      missingLogReminderTime: input.missingLogReminderTime,
+      channels: input.channels,
+      timezone: input.timezone,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp
+    };
+
+    const payload = {
+      Name: titleProperty("ReminderSettings"),
+      Id: richTextProperty(next.id),
+      UserId: richTextProperty(next.userId),
+      IsEnabled: checkboxProperty(next.isEnabled),
+      DailyReminderTime: richTextProperty(next.dailyReminderTime),
+      MissingLogReminderTime: richTextProperty(next.missingLogReminderTime),
+      Channels: richTextProperty(next.channels.join(",")),
+      Timezone: richTextProperty(next.timezone),
+      CreatedAt: dateProperty(next.createdAt),
+      UpdatedAt: dateProperty(next.updatedAt)
+    };
+
+    if (existingPage) {
+      await updateDatabasePage(existingPage.id, payload);
+    } else {
+      await createDatabasePage(reminderDbId, payload);
+    }
+    return next;
+  },
+
+  async evaluateReminder(userId: string, date: string): Promise<ReminderEvaluation> {
+    const [mealCheckins, workoutLogs, bodyMetrics] = await Promise.all([
+      repo.listMealCheckinsByUserInRange(userId, date, date),
+      repo.listWorkoutsByUserInRange(userId, date, date),
+      repo.listBodyMetricsByUserInRange(userId, date, date)
+    ]);
+
+    const mealCount = mealCheckins.filter((item) => !item.isDeleted && item.completed).length;
+    const workoutCount = workoutLogs.filter((item) => !item.isDeleted).length;
+    const bodyMetricCount = bodyMetrics.filter((item) => !item.isDeleted).length;
+
+    return {
+      date,
+      mealCount,
+      workoutCount,
+      bodyMetricCount,
+      isMissingLogCandidate: mealCount === 0 && workoutCount === 0 && bodyMetricCount === 0
+    };
+  },
+
   async updateMealLog(
     userId: string,
     id: string,
@@ -1706,5 +2112,6 @@ export const repo = {
     store.goals.length = 0;
     store.mealTemplates.length = 0;
     store.workoutTemplates.length = 0;
+    store.reminderSettings.clear();
   }
 };

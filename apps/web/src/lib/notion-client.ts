@@ -6,6 +6,7 @@ type NotionDatabaseConfig = {
   goalsDbId: string;
   mealTemplatesDbId?: string;
   workoutTemplatesDbId?: string;
+  reminderSettingsDbId?: string;
 };
 
 type NotionConfig = {
@@ -31,6 +32,7 @@ function ensureConfig(): NotionConfig {
   const goalsDbId = process.env.NOTION_DB_GOALS?.trim();
   const mealTemplatesDbId = process.env.NOTION_DB_MEAL_TEMPLATES?.trim();
   const workoutTemplatesDbId = process.env.NOTION_DB_WORKOUT_TEMPLATES?.trim();
+  const reminderSettingsDbId = process.env.NOTION_DB_REMINDER_SETTINGS?.trim();
 
   const missing: string[] = [];
   if (!token) {
@@ -65,7 +67,8 @@ function ensureConfig(): NotionConfig {
       bodyMetricsDbId: bodyMetricsDbId!,
       goalsDbId: goalsDbId!,
       ...(mealTemplatesDbId ? { mealTemplatesDbId } : {}),
-      ...(workoutTemplatesDbId ? { workoutTemplatesDbId } : {})
+      ...(workoutTemplatesDbId ? { workoutTemplatesDbId } : {}),
+      ...(reminderSettingsDbId ? { reminderSettingsDbId } : {})
     }
   };
 }

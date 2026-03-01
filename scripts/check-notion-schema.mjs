@@ -49,7 +49,7 @@ const schemas = [
     label: "Sessions",
     envKey: "NOTION_DB_SESSIONS",
     required: ["Name", "UserId", "IsGuest", "CreatedAt"],
-    optional: ["Email", "UpgradedAt"]
+    optional: ["Email", "UpgradedAt", "AuthProvider", "ProviderSubject", "AvatarUrl"]
   },
   {
     label: "Meals",
@@ -99,6 +99,23 @@ const schemas = [
     envKey: "NOTION_DB_WORKOUT_TEMPLATES",
     required: ["Name", "Id", "UserId", "Label", "BodyPart", "Purpose", "Tool", "IsActive", "CreatedAt"],
     optional: ["DefaultDuration"]
+  },
+  {
+    label: "ReminderSettings",
+    envKey: "NOTION_DB_REMINDER_SETTINGS",
+    required: [
+      "Name",
+      "Id",
+      "UserId",
+      "IsEnabled",
+      "DailyReminderTime",
+      "MissingLogReminderTime",
+      "Channels",
+      "Timezone",
+      "CreatedAt",
+      "UpdatedAt"
+    ],
+    optional: []
   }
 ];
 

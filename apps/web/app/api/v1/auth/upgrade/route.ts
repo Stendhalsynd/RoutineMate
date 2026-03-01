@@ -1,7 +1,7 @@
 import { authUpgradeRequestSchema } from "@routinemate/api-contract";
 import { badRequest, notFound, ok, internalError, zodIssues } from "@/lib/api-utils";
 import { repo } from "@/lib/repository";
-import { resolveSessionId } from "@/lib/session-cookie";
+import { resolveSessionId, setSessionCookie } from "@/lib/session-cookie";
 
 export async function POST(request: Request) {
   try {
@@ -22,7 +22,9 @@ export async function POST(request: Request) {
       return notFound("Session was not found.");
     }
 
-    return ok(upgraded, 200);
+    const response = ok(upgraded, 200);
+    setSessionCookie(response, upgraded.sessionId);
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to upgrade account.";
     return internalError(message);

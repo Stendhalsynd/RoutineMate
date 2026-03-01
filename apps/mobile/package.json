@@ -13,6 +13,8 @@
   "dependencies": {
     "@routinemate/ui": "0.1.0",
     "expo": "~52.0.0",
+    "expo-auth-session": "^55.0.6",
+    "expo-notifications": "^55.0.10",
     "expo-status-bar": "~2.0.1",
     "react": "18.3.1",
     "react-native": "0.76.3"
