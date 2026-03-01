@@ -29,12 +29,22 @@ if [[ ! -d "${ANDROID_DIR}" ]]; then
 fi
 
 ensure_expo_module_gradle_plugin() {
-  local plugin_dir="${ANDROID_DIR}/gradle-plugin"
+  local plugin_dir_old="${ANDROID_DIR}/gradle-plugin"
+  local plugin_dir="${ANDROID_DIR}/expo-module-gradle-plugin"
+
+  # avoid includeBuild name conflicts with React Native's gradle-plugin directory
+  if [[ -d "${plugin_dir_old}" ]]; then
+    rm -rf "${plugin_dir_old}"
+  fi
   mkdir -p "${plugin_dir}/src/main/groovy" "${plugin_dir}/src/main/resources/META-INF/gradle-plugins"
 
   cat > "${plugin_dir}/build.gradle" <<'EOF'
 plugins {
     id 'groovy-gradle-plugin'
+}
+
+tasks.named('processResources').configure {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 repositories {
@@ -67,7 +77,9 @@ class ExpoModuleGradlePlugin implements Plugin<Project> {
         def candidatePaths = [
                 new File(project.rootProject.projectDir, "../node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"),
                 new File(project.rootProject.projectDir, "node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"),
-                new File(project.rootDir, "node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle")
+                new File(project.rootDir, "node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"),
+                new File(project.rootProject.projectDir.parentFile.parentFile, "node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"),
+                new File(project.rootProject.projectDir.parentFile.parentFile.parentFile, "node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle")
         ]
 
         def pluginScript = candidatePaths.find { it.exists() } as File
@@ -81,9 +93,9 @@ class ExpoModuleGradlePlugin implements Plugin<Project> {
 }
 EOF
 
-  cat > "${plugin_dir}/src/main/resources/META-INF/gradle-plugins/expo-module-gradle-plugin.properties" <<'EOF'
-implementation-class=ExpoModuleGradlePlugin
-EOF
+  # `gradlePlugin` DSL in this project already generates this file.
+  # Keep only generated marker to avoid duplicate resource collisions.
+  rm -f "${plugin_dir}/src/main/resources/META-INF/gradle-plugins/expo-module-gradle-plugin.properties"
 
   local settings_file="${ANDROID_DIR}/settings.gradle"
   python3 - "$settings_file" <<'PY'
@@ -92,49 +104,71 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text()
-needle = "    includeBuild(new File(rootDir, 'gradle-plugin'))"
 
 if "pluginManagement {" not in text:
     raise SystemExit("settings.gradle missing pluginManagement block.")
 
+needle = "    includeBuild(new File(rootDir, 'expo-module-gradle-plugin'))"
 lines = text.splitlines()
-seen = False
 filtered = []
 for line in lines:
-    if line.strip() == needle.strip():
-        if seen:
-            continue
-        seen = True
+    stripped = line.strip()
+    if (
+        "includeBuild(new File(rootDir, 'gradle-plugin')" in stripped
+        or stripped == needle
+    ):
+        continue
     filtered.append(line)
-text = "\n".join(filtered) + "\n"
 
+text = "\n".join(filtered)
 if needle not in text:
     marker = "pluginManagement {"
-    idx = text.find(marker)
-    if idx == -1:
+    replacement = f"{marker}\n{needle}"
+    if marker not in text:
         raise SystemExit("Could not locate pluginManagement block.")
-    insert_at = idx + len(marker)
-    text = text.replace(
-        marker,
-        "pluginManagement {\n" + needle + "\n",
-        1,
-    )
-else:
-    # ensure a single declaration and keep ordering.
-    if text.count(needle) > 1:
-        # remove any extra declarations (kept only first occurrence)
-        first_index = text.find(needle)
-        while True:
-            second_index = text.find(needle, first_index + len(needle))
-            if second_index == -1:
-                break
-            text = text[:second_index] + text[second_index + len(needle):]
+    text = text.replace(marker, replacement, 1)
+text = text + "\n"
 
 path.write_text(text)
 PY
 }
 
+patch_expo_modules_core_plugin() {
+  local core_plugin_file="${ROOT_DIR}/node_modules/expo-modules-core/android/ExpoModulesCorePlugin.gradle"
+
+  if [[ ! -f "${core_plugin_file}" ]]; then
+    return
+  fi
+
+  if rg -n "releaseComponent = components.findByName\\(\"release\"\\)" "${core_plugin_file}" >/dev/null 2>&1; then
+    return
+  fi
+
+  python3 - "${core_plugin_file}" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+old = """          from components.release
+"""
+new = """          def releaseComponent = components.findByName("release")
+          if (releaseComponent != null) {
+            from releaseComponent
+          }
+"""
+
+if old not in text:
+    print("[WARN] useExpoPublishing block was not updated; pattern changed", file=sys.stderr)
+    sys.exit(0)
+
+path.write_text(text.replace(old, new, 1))
+PY
+}
+
 ensure_expo_module_gradle_plugin
+patch_expo_modules_core_plugin
 
 GRADLE_TASK=""
 APK_SRC=""

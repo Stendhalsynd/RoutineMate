@@ -9,6 +9,9 @@
     ],
     "android": {
       "package": "com.routinemate.app"
-    }
+    },
+    "plugins": [
+      "expo-asset"
+    ]
   }
 }
