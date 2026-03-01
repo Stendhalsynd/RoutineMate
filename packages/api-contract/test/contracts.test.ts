@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bodyMetricUpdateSchema,
   calendarRangeQuerySchema,
   calendarDayQuerySchema,
   goalInputSchema,
   quickMealLogInputSchema,
-  quickWorkoutLogInputSchema
+  quickMealLogUpdateSchema,
+  quickWorkoutLogInputSchema,
+  quickWorkoutLogUpdateSchema
 } from "../src/index";
 
 test("quickMealLogInputSchema parses valid payload", () => {
@@ -43,6 +46,31 @@ test("quickWorkoutLogInputSchema rejects invalid duration", () => {
     durationMinutes: 0
   });
 
+  assert.equal(result.success, false);
+});
+
+test("quickMealLogUpdateSchema rejects payload without update fields", () => {
+  const result = quickMealLogUpdateSchema.safeParse({
+    sessionId: "sess-1",
+    id: "meal-1"
+  });
+  assert.equal(result.success, false);
+});
+
+test("quickWorkoutLogUpdateSchema parses valid partial payload", () => {
+  const result = quickWorkoutLogUpdateSchema.safeParse({
+    sessionId: "sess-1",
+    id: "workout-1",
+    intensity: "high"
+  });
+  assert.equal(result.success, true);
+});
+
+test("bodyMetricUpdateSchema requires at least one field", () => {
+  const result = bodyMetricUpdateSchema.safeParse({
+    sessionId: "sess-1",
+    id: "metric-1"
+  });
   assert.equal(result.success, false);
 });
 

@@ -43,6 +43,26 @@ export const quickMealLogInputSchema = z.object({
   portionSize: z.enum(["small", "medium", "large"])
 });
 
+export const quickMealLogUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    date: isoDateSchema.optional(),
+    mealType: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(),
+    foodLabel: nonEmptyString.max(120).optional(),
+    portionSize: z.enum(["small", "medium", "large"]).optional()
+  })
+  .refine(
+    (value) =>
+      value.date !== undefined ||
+      value.mealType !== undefined ||
+      value.foodLabel !== undefined ||
+      value.portionSize !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
+
 export const quickWorkoutLogInputSchema = z.object({
   sessionId: nonEmptyString,
   date: isoDateSchema,
@@ -57,6 +77,38 @@ export const quickWorkoutLogInputSchema = z.object({
   intensity: z.enum(["low", "medium", "high"]).default("medium")
 });
 
+export const quickWorkoutLogUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    date: isoDateSchema.optional(),
+    bodyPart: z.enum(["chest", "back", "legs", "core", "shoulders", "arms", "full_body", "cardio"]).optional(),
+    purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
+    tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional(),
+    exerciseName: nonEmptyString.max(120).optional(),
+    sets: z.number().int().min(1).max(20).optional(),
+    reps: z.number().int().min(1).max(100).optional(),
+    weightKg: z.number().min(0).max(500).optional(),
+    durationMinutes: z.number().int().min(1).max(300).optional(),
+    intensity: z.enum(["low", "medium", "high"]).optional()
+  })
+  .refine(
+    (value) =>
+      value.date !== undefined ||
+      value.bodyPart !== undefined ||
+      value.purpose !== undefined ||
+      value.tool !== undefined ||
+      value.exerciseName !== undefined ||
+      value.sets !== undefined ||
+      value.reps !== undefined ||
+      value.weightKg !== undefined ||
+      value.durationMinutes !== undefined ||
+      value.intensity !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
+
 export const bodyMetricInputSchema = z
   .object({
     sessionId: nonEmptyString,
@@ -67,6 +119,21 @@ export const bodyMetricInputSchema = z
   .refine((value) => value.weightKg !== undefined || value.bodyFatPct !== undefined, {
     message: "At least one metric is required"
   });
+
+export const bodyMetricUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    date: isoDateSchema.optional(),
+    weightKg: z.number().min(0).max(400).optional(),
+    bodyFatPct: z.number().min(1).max(70).optional()
+  })
+  .refine(
+    (value) => value.date !== undefined || value.weightKg !== undefined || value.bodyFatPct !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
 
 export const goalInputSchema = z.object({
   sessionId: nonEmptyString,
@@ -115,8 +182,11 @@ export function formatZodIssues(error: z.ZodError): string[] {
 export type AuthGuestRequest = z.infer<typeof authGuestRequestSchema>;
 export type AuthUpgradeRequest = z.infer<typeof authUpgradeRequestSchema>;
 export type QuickMealLogRequest = z.infer<typeof quickMealLogInputSchema>;
+export type QuickMealLogUpdateRequest = z.infer<typeof quickMealLogUpdateSchema>;
 export type QuickWorkoutLogRequest = z.infer<typeof quickWorkoutLogInputSchema>;
+export type QuickWorkoutLogUpdateRequest = z.infer<typeof quickWorkoutLogUpdateSchema>;
 export type BodyMetricRequest = z.infer<typeof bodyMetricInputSchema>;
+export type BodyMetricUpdateRequest = z.infer<typeof bodyMetricUpdateSchema>;
 export type GoalRequest = z.infer<typeof goalInputSchema>;
 export type GoalQuery = z.infer<typeof goalQuerySchema>;
 export type CalendarDayQuery = z.infer<typeof calendarDayQuerySchema>;

@@ -340,6 +340,21 @@ function mapGoal(page: NotionPage): Goal | null {
   return goal;
 }
 
+async function findNotionUserPageById(
+  databaseId: string,
+  userId: string,
+  recordId: string
+): Promise<NotionPage | null> {
+  const pages = await queryDatabasePages(databaseId, {
+    filter: { property: "UserId", rich_text: { equals: userId } }
+  });
+  const target =
+    pages
+      .map(toPage)
+      .find((page) => (getRichText(page, "Id") ?? page.id) === recordId) ?? null;
+  return target;
+}
+
 export const repo = {
   async createGuestSession(deviceId?: string): Promise<Session> {
     if (isMemoryMode()) {
@@ -589,6 +604,154 @@ export const repo = {
       CreatedAt: dateProperty(metric.createdAt)
     });
     return metric;
+  },
+
+  async updateMealLog(
+    userId: string,
+    id: string,
+    updates: Partial<Pick<MealLog, "date" | "mealType" | "foodLabel" | "portionSize">>
+  ): Promise<MealLog | null> {
+    if (isMemoryMode()) {
+      const index = store.meals.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.meals[index];
+      if (!current) {
+        return null;
+      }
+      const next: MealLog = {
+        ...current,
+        ...updates
+      };
+      store.meals[index] = next;
+      return next;
+    }
+
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.mealsDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapMeal(page);
+    if (!current) {
+      return null;
+    }
+
+    const next: MealLog = {
+      ...current,
+      ...updates
+    };
+    await updateDatabasePage(page.id, {
+      Name: titleProperty(`${next.date} ${next.foodLabel}`),
+      Date: dateProperty(next.date),
+      MealType: selectProperty(next.mealType),
+      FoodLabel: richTextProperty(next.foodLabel),
+      PortionSize: selectProperty(next.portionSize)
+    });
+    return next;
+  },
+
+  async updateWorkoutLog(
+    userId: string,
+    id: string,
+    updates: Partial<
+      Pick<
+        WorkoutLog,
+        "date" | "bodyPart" | "purpose" | "tool" | "exerciseName" | "sets" | "reps" | "weightKg" | "durationMinutes" | "intensity"
+      >
+    >
+  ): Promise<WorkoutLog | null> {
+    if (isMemoryMode()) {
+      const index = store.workouts.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.workouts[index];
+      if (!current) {
+        return null;
+      }
+      const next: WorkoutLog = {
+        ...current,
+        ...updates
+      };
+      store.workouts[index] = next;
+      return next;
+    }
+
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.workoutsDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapWorkout(page);
+    if (!current) {
+      return null;
+    }
+    const next: WorkoutLog = {
+      ...current,
+      ...updates
+    };
+
+    await updateDatabasePage(page.id, {
+      Name: titleProperty(`${next.date} ${next.exerciseName}`),
+      Date: dateProperty(next.date),
+      BodyPart: selectProperty(next.bodyPart),
+      Purpose: selectProperty(next.purpose),
+      Tool: selectProperty(next.tool),
+      ExerciseName: richTextProperty(next.exerciseName),
+      Intensity: selectProperty(next.intensity),
+      ...(next.sets !== undefined ? { Sets: numberProperty(next.sets) } : {}),
+      ...(next.reps !== undefined ? { Reps: numberProperty(next.reps) } : {}),
+      ...(next.weightKg !== undefined ? { WeightKg: numberProperty(next.weightKg) } : {}),
+      ...(next.durationMinutes !== undefined ? { DurationMinutes: numberProperty(next.durationMinutes) } : {})
+    });
+    return next;
+  },
+
+  async updateBodyMetric(
+    userId: string,
+    id: string,
+    updates: Partial<Pick<BodyMetric, "date" | "weightKg" | "bodyFatPct">>
+  ): Promise<BodyMetric | null> {
+    if (isMemoryMode()) {
+      const index = store.bodyMetrics.findIndex((item) => item.userId === userId && item.id === id);
+      if (index < 0) {
+        return null;
+      }
+      const current = store.bodyMetrics[index];
+      if (!current) {
+        return null;
+      }
+      const next: BodyMetric = {
+        ...current,
+        ...updates
+      };
+      store.bodyMetrics[index] = next;
+      return next;
+    }
+
+    const databases = getNotionDatabases();
+    const page = await findNotionUserPageById(databases.bodyMetricsDbId, userId, id);
+    if (!page) {
+      return null;
+    }
+    const current = mapBodyMetric(page);
+    if (!current) {
+      return null;
+    }
+    const next: BodyMetric = {
+      ...current,
+      ...updates
+    };
+
+    await updateDatabasePage(page.id, {
+      Name: titleProperty(next.date),
+      Date: dateProperty(next.date),
+      ...(next.weightKg !== undefined ? { WeightKg: numberProperty(next.weightKg) } : {}),
+      ...(next.bodyFatPct !== undefined ? { BodyFatPct: numberProperty(next.bodyFatPct) } : {})
+    });
+    return next;
   },
 
   async upsertGoal(userId: string, input: Omit<GoalInput, "sessionId">): Promise<Goal> {
