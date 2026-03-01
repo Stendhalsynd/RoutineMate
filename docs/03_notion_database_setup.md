@@ -283,3 +283,38 @@ Playwright 검증 시나리오 파일:
 - 식단/운동 템플릿 추가 성공 확인
 - `Notion integration is not configured...` 에러 미노출
 - `빠른 API 확인` 섹션 미노출
+
+## 9) Android Google Login 승인 오류 트러블슈팅
+
+`액세스가 차단되었습니다: 승인 오류`는 Google OAuth 앱 설정 불일치가 원인인 경우가 많습니다.
+
+1. Android 클라이언트 자격증명 점검
+- `GOOGLE_ANDROID_CLIENT_ID`(및 `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`)는 **Android 타입 클라이언트 ID**여야 합니다.
+- Web client ID를 Android 전용으로 사용하면 승인 단계에서 막힙니다.
+
+2. 패키지명/키 해시 일치
+- Google Cloud Console Android OAuth 클라이언트의 `Package name`은 `com.routinemate.app`이어야 합니다.
+- SHA-1 지문은 실제 빌드에 사용하는 키스토어의 값을 사용해야 합니다.
+- Debug/Release 빌드가 다르면 각 SHA-1을 모두 등록해야 합니다.
+
+3. SHA-1 확인 (예시)
+- Android SDK 기본 debug keystore:
+```bash
+keytool -list -v -keystore "$HOME/Library/Android/sdk/.android/debug.keystore" -alias androiddebugkey -storepass android -keypass android
+```
+- release keystore:
+```bash
+keytool -list -v -keystore /path/to/your-release.keystore -alias YOUR_ALIAS
+```
+
+4. 리다이렉트 URI/스킴
+- 앱에서 사용하는 URI는 `makeRedirectUri({ scheme: "routinemate", path: "oauth" })` 입니다.
+- APK 재빌드 전 값 변경 시 앱 스킴(`scheme`)이 변경되지 않도록 확인합니다.
+
+5. OAuth 동의 화면
+- 앱이 "테스트" 상태면 로그인 시도 Google 계정을 테스트 사용자로 추가하세요.
+- 사용자 인증이 막히면 동의 화면의 테스트 사용자/동의 상태, 승인 대상 스코프 설정을 확인합니다.
+
+6. 환경변수 정합성
+- Vercel 환경변수에도 `GOOGLE_ANDROID_CLIENT_ID`를 동일값으로 등록했는지 확인합니다.
+- 모바일 실행용 번들에 `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`가 반영되었는지 확인하고, APK를 새로 빌드합니다.

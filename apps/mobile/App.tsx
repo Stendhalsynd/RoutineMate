@@ -1,6 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import * as AuthSession from "expo-auth-session";
 import * as Notifications from "expo-notifications";
+import * as WebBrowser from "expo-web-browser";
 import {
   Pressable,
   SafeAreaView,
@@ -138,6 +139,8 @@ type Message = {
   type: MessageType;
   text: string;
 };
+
+WebBrowser.maybeCompleteAuthSession();
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://routinemate-kohl.vercel.app";
 const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "";
@@ -1125,22 +1128,39 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID가 필요합니다." });
         return;
       }
-      const redirectUri = AuthSession.makeRedirectUri();
+      const redirectUri = AuthSession.makeRedirectUri({
+        scheme: "routinemate",
+        path: "oauth",
+        preferLocalhost: false
+      });
       const nonce = String(Date.now());
       const request = new AuthSession.AuthRequest({
         clientId: GOOGLE_ANDROID_CLIENT_ID,
         responseType: AuthSession.ResponseType.IdToken,
         scopes: ["openid", "email", "profile"],
         redirectUri,
-        extraParams: { nonce }
+        extraParams: { nonce, prompt: "select_account" }
       });
 
-      const authResult = await request.promptAsync({
+      const authResult = (await request.promptAsync({
         authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth"
-      });
+      })) as AuthSession.AuthSessionResult & {
+        params?: Record<string, string>;
+        errorCode?: string | null;
+        error?: string | { message?: string } | null;
+      };
 
-      if (authResult.type !== "success" || !authResult.params?.id_token) {
-        setMessage({ type: "error", text: "Google 인증이 취소되었거나 실패했습니다." });
+      if (authResult.type === "cancel" || authResult.type === "dismiss") {
+        setMessage({ type: "error", text: "Google 인증이 취소되었습니다." });
+        return;
+      }
+      if (authResult.type === "error" || !authResult.params?.id_token) {
+        const detail = (authResult as { error?: { message?: string } | string; errorCode?: string | null }).error;
+        const errorText = typeof detail === "string" ? detail : detail?.message;
+        setMessage({
+          type: "error",
+          text: `Google 인증에 실패했습니다${errorText ? ` (${errorText})` : ""}${authResult.errorCode ? ` (${authResult.errorCode})` : ""}`
+        });
         return;
       }
 
