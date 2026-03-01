@@ -339,6 +339,10 @@ p {
   align-items: start;
 }
 
+.settings-submit {
+  margin-top: 14px;
+}
+
 .form-grid {
   display: grid;
   gap: 10px;

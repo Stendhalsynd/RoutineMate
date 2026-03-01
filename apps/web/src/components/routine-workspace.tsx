@@ -1086,7 +1086,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width" onClick={() => void saveGoal()}>
+              <button type="button" className="button button-primary full-width settings-submit" onClick={() => void saveGoal()}>
                 목표 저장
               </button>
             </article>
@@ -1120,7 +1120,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   </select>
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width" onClick={() => void createMealTemplateAction()}>
+              <button type="button" className="button button-primary full-width settings-submit" onClick={() => void createMealTemplateAction()}>
                 식단 템플릿 추가
               </button>
               <div className="record-list">
@@ -1213,7 +1213,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   </select>
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width" onClick={() => void createWorkoutTemplateAction()}>
+              <button type="button" className="button button-primary full-width settings-submit" onClick={() => void createWorkoutTemplateAction()}>
                 운동 템플릿 추가
               </button>
               <div className="record-list">
