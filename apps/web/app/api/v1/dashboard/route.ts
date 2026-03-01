@@ -3,7 +3,7 @@ import { badRequest, notFound, ok, internalError, zodIssues } from "@/lib/api-ut
 import { aggregateDashboard } from "@/lib/dashboard";
 import { repo } from "@/lib/repository";
 import { resolveSessionId } from "@/lib/session-cookie";
-import { mealSlotToMealType, type MealLog } from "@routinemate/domain";
+import { mealSlotToMealType, rangeToDays, type MealLog } from "@routinemate/domain";
 
 function mealCheckinToMealLog(
   checkin: Awaited<ReturnType<typeof repo.listMealCheckinsByUser>>[number]
@@ -20,6 +20,17 @@ function mealCheckinToMealLog(
     portionSize: "medium",
     ...(checkin.templateId ? { templateId: checkin.templateId } : {}),
     createdAt: checkin.createdAt
+  };
+}
+
+function buildRangeWindow(range: "7d" | "30d" | "90d"): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10);
+  const endMs = Date.parse(`${to}T00:00:00.000Z`);
+  const fromMs = endMs - (rangeToDays(range) - 1) * 24 * 60 * 60 * 1000;
+  return {
+    from: new Date(fromMs).toISOString().slice(0, 10),
+    to
   };
 }
 
@@ -41,8 +52,9 @@ export async function GET(request: Request) {
       return notFound("Session was not found.");
     }
 
-    const mealLogs = await repo.listMealsByUser(session.userId);
-    const checkins = await repo.listMealCheckinsByUser(session.userId);
+    const window = buildRangeWindow(parsed.data.range);
+    const mealLogs = await repo.listMealsByUserInRange(session.userId, window.from, window.to);
+    const checkins = await repo.listMealCheckinsByUserInRange(session.userId, window.from, window.to);
     const mergedMeals = new Map<string, MealLog>();
     for (const item of mealLogs) {
       mergedMeals.set(item.id, item);
@@ -57,8 +69,8 @@ export async function GET(request: Request) {
     const summary = aggregateDashboard({
       range: parsed.data.range,
       meals: Array.from(mergedMeals.values()),
-      workouts: await repo.listWorkoutsByUser(session.userId),
-      bodyMetrics: await repo.listBodyMetricsByUser(session.userId),
+      workouts: await repo.listWorkoutsByUserInRange(session.userId, window.from, window.to),
+      bodyMetrics: await repo.listBodyMetricsByUserInRange(session.userId, window.from, window.to),
       goals: await repo.listGoalsByUser(session.userId)
     });
 

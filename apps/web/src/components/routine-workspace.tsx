@@ -1,36 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BodyMetric,
   BodyPart,
+  BootstrapPayload,
   DashboardBucket,
   DashboardSummary,
+  DaySnapshot,
   Goal,
   MealCheckin,
   MealSlot,
   MealTemplate,
   RangeKey,
+  Session,
   WorkoutIntensity,
   WorkoutLog,
   WorkoutPurpose,
   WorkoutTemplate,
-  WorkoutTool
+  WorkoutTool,
+  WorkspaceView
 } from "@routinemate/domain";
-
-export type WorkspaceView = "dashboard" | "records" | "settings";
 
 type MessageType = "error" | "success" | "info";
 type Message = { type: MessageType; text: string };
-
-type SessionPayload = { sessionId: string; userId: string };
-
-type DayPayload = {
-  date: string;
-  mealCheckins: MealCheckin[];
-  workoutLogs: WorkoutLog[];
-  bodyMetrics: BodyMetric[];
-};
 
 type GoalForm = {
   weeklyRoutineTarget: string;
@@ -57,6 +51,12 @@ type BodyMetricForm = {
 };
 
 const ranges: RangeKey[] = ["7d", "30d", "90d"];
+
+const rangeLabels: Record<RangeKey, "Day" | "Week" | "Month"> = {
+  "7d": "Day",
+  "30d": "Week",
+  "90d": "Month"
+};
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -99,12 +99,32 @@ const intensityOptions: Array<{ value: WorkoutIntensity; label: string }> = [
   { value: "high", label: "높음" }
 ];
 
+const queryKeys = {
+  session: ["session"] as const,
+  bootstrap: (sessionId: string, view: WorkspaceView, date: string, range: RangeKey) =>
+    ["bootstrap", sessionId, view, date, range] as const,
+  dashboard: (sessionId: string, range: RangeKey) => ["dashboard", sessionId, range] as const,
+  day: (sessionId: string, date: string) => ["day", sessionId, date] as const,
+  goal: (sessionId: string) => ["goal", sessionId] as const,
+  mealTemplates: (sessionId: string) => ["mealTemplates", sessionId] as const,
+  workoutTemplates: (sessionId: string) => ["workoutTemplates", sessionId] as const
+};
+
 function todayYmd(): string {
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function defaultDaySnapshot(date: string): DaySnapshot {
+  return {
+    date,
+    mealCheckins: [],
+    workoutLogs: [],
+    bodyMetrics: []
+  };
 }
 
 function parseNumber(value: string): number | undefined {
@@ -150,16 +170,107 @@ function formatDday(daysToDday?: number): string {
   return `D+${Math.abs(daysToDday)}`;
 }
 
+async function fetchSession(): Promise<Session | null> {
+  const response = await fetch("/api/v1/auth/guest");
+  if (response.status === 400 || response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    const message = await parseErrorMessage(response, "세션 확인에 실패했습니다.");
+    throw new Error(message);
+  }
+  const payload = (await response.json()) as { data?: Session | null };
+  return payload.data ?? null;
+}
+
+async function fetchDashboard(sessionId: string, range: RangeKey): Promise<DashboardSummary> {
+  const response = await fetch(
+    `/api/v1/dashboard?sessionId=${encodeURIComponent(sessionId)}&range=${encodeURIComponent(range)}`
+  );
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "대시보드 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: DashboardSummary };
+  return payload.data ?? {
+    range,
+    granularity: "day",
+    adherenceRate: 0,
+    totalMeals: 0,
+    totalWorkouts: 0,
+    latestWeightKg: null,
+    latestBodyFatPct: null,
+    daily: [],
+    buckets: [],
+    goals: []
+  };
+}
+
+async function fetchGoal(sessionId: string): Promise<Goal | null> {
+  const response = await fetch(`/api/v1/goals?sessionId=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "목표 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: { goal?: Goal | null } };
+  return payload.data?.goal ?? null;
+}
+
+async function fetchDay(sessionId: string, date: string): Promise<DaySnapshot> {
+  const response = await fetch(
+    `/api/v1/calendar/day?sessionId=${encodeURIComponent(sessionId)}&date=${encodeURIComponent(date)}`
+  );
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "기록 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: DaySnapshot };
+  return payload.data ?? defaultDaySnapshot(date);
+}
+
+async function fetchMealTemplates(sessionId: string): Promise<MealTemplate[]> {
+  const response = await fetch(`/api/v1/templates/meals?sessionId=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "식단 템플릿 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: { templates?: MealTemplate[] } };
+  return payload.data?.templates ?? [];
+}
+
+async function fetchWorkoutTemplates(sessionId: string): Promise<WorkoutTemplate[]> {
+  const response = await fetch(`/api/v1/templates/workouts?sessionId=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "운동 템플릿 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: { templates?: WorkoutTemplate[] } };
+  return payload.data?.templates ?? [];
+}
+
+async function fetchBootstrap(
+  sessionId: string,
+  view: WorkspaceView,
+  date: string,
+  range: RangeKey
+): Promise<BootstrapPayload> {
+  const response = await fetch(
+    `/api/v1/bootstrap?sessionId=${encodeURIComponent(sessionId)}&view=${encodeURIComponent(view)}&date=${encodeURIComponent(
+      date
+    )}&range=${encodeURIComponent(range)}`
+  );
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, "초기 데이터 조회에 실패했습니다."));
+  }
+  const payload = (await response.json()) as { data?: BootstrapPayload };
+  return (
+    payload.data ?? {
+      session: null,
+      fetchedAt: new Date().toISOString()
+    }
+  );
+}
+
 export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
-  const [session, setSession] = useState<SessionPayload | null>(null);
+  const queryClient = useQueryClient();
+
   const [range, setRange] = useState<RangeKey>("7d");
   const [selectedDate, setSelectedDate] = useState<string>(todayYmd());
-
-  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
-  const [goal, setGoal] = useState<Goal | null>(null);
-  const [dayData, setDayData] = useState<DayPayload>({ date: todayYmd(), mealCheckins: [], workoutLogs: [], bodyMetrics: [] });
-  const [mealTemplates, setMealTemplates] = useState<MealTemplate[]>([]);
-  const [workoutTemplates, setWorkoutTemplates] = useState<WorkoutTemplate[]>([]);
 
   const [sessionMessage, setSessionMessage] = useState<Message | null>(null);
   const [dashboardMessage, setDashboardMessage] = useState<Message | null>(null);
@@ -209,6 +320,171 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     defaultDuration: "30"
   });
 
+  const [editingMealTemplateId, setEditingMealTemplateId] = useState<string | null>(null);
+  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = useState<{ label: string; mealSlot: MealSlot }>({
+    label: "",
+    mealSlot: "lunch"
+  });
+
+  const [editingWorkoutTemplateId, setEditingWorkoutTemplateId] = useState<string | null>(null);
+  const [editingWorkoutTemplateDraft, setEditingWorkoutTemplateDraft] = useState<{
+    label: string;
+    bodyPart: BodyPart;
+    purpose: WorkoutPurpose;
+    tool: WorkoutTool;
+    defaultDuration: string;
+  }>({
+    label: "",
+    bodyPart: "full_body",
+    purpose: "fat_loss",
+    tool: "bodyweight",
+    defaultDuration: "30"
+  });
+
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.session,
+    queryFn: fetchSession,
+    retry: false,
+    staleTime: 10 * 60_000,
+    gcTime: 60 * 60_000
+  });
+
+  const session = sessionQuery.data ?? null;
+  const sessionId = session?.sessionId;
+
+  const dashboardQuery = useQuery({
+    queryKey: queryKeys.dashboard(sessionId ?? "", range),
+    queryFn: () => fetchDashboard(sessionId!, range),
+    enabled: Boolean(sessionId) && view === "dashboard",
+    placeholderData: (previous) => previous
+  });
+
+  const goalQuery = useQuery({
+    queryKey: queryKeys.goal(sessionId ?? ""),
+    queryFn: () => fetchGoal(sessionId!),
+    enabled: Boolean(sessionId) && (view === "dashboard" || view === "settings"),
+    placeholderData: (previous) => previous
+  });
+
+  const dayQuery = useQuery({
+    queryKey: queryKeys.day(sessionId ?? "", selectedDate),
+    queryFn: () => fetchDay(sessionId!, selectedDate),
+    enabled: Boolean(sessionId) && view === "records",
+    placeholderData: (previous) => previous
+  });
+
+  const mealTemplatesQuery = useQuery({
+    queryKey: queryKeys.mealTemplates(sessionId ?? ""),
+    queryFn: () => fetchMealTemplates(sessionId!),
+    enabled: Boolean(sessionId) && (view === "records" || view === "settings"),
+    placeholderData: (previous) => previous
+  });
+
+  const workoutTemplatesQuery = useQuery({
+    queryKey: queryKeys.workoutTemplates(sessionId ?? ""),
+    queryFn: () => fetchWorkoutTemplates(sessionId!),
+    enabled: Boolean(sessionId) && (view === "records" || view === "settings"),
+    placeholderData: (previous) => previous
+  });
+
+  const bootstrapQuery = useQuery({
+    queryKey: queryKeys.bootstrap(sessionId ?? "", view, selectedDate, range),
+    queryFn: () => fetchBootstrap(sessionId!, view, selectedDate, range),
+    enabled: Boolean(sessionId),
+    staleTime: 5_000,
+    placeholderData: (previous) => previous
+  });
+
+  useEffect(() => {
+    if (!(sessionQuery.error instanceof Error)) {
+      return;
+    }
+    setSessionMessage({ type: "error", text: sessionQuery.error.message });
+  }, [sessionQuery.error]);
+
+  useEffect(() => {
+    if (!(dashboardQuery.error instanceof Error)) {
+      return;
+    }
+    setDashboardMessage({ type: "error", text: dashboardQuery.error.message });
+  }, [dashboardQuery.error]);
+
+  useEffect(() => {
+    if (!(dayQuery.error instanceof Error)) {
+      return;
+    }
+    setRecordsMessage({ type: "error", text: dayQuery.error.message });
+  }, [dayQuery.error]);
+
+  useEffect(() => {
+    if (!(mealTemplatesQuery.error instanceof Error) && !(workoutTemplatesQuery.error instanceof Error) && !(goalQuery.error instanceof Error)) {
+      return;
+    }
+    const message =
+      (mealTemplatesQuery.error instanceof Error && mealTemplatesQuery.error.message) ||
+      (workoutTemplatesQuery.error instanceof Error && workoutTemplatesQuery.error.message) ||
+      (goalQuery.error instanceof Error && goalQuery.error.message) ||
+      "설정 데이터 조회에 실패했습니다.";
+    setSettingsMessage({ type: "error", text: message });
+  }, [goalQuery.error, mealTemplatesQuery.error, workoutTemplatesQuery.error]);
+
+  useEffect(() => {
+    if (!sessionId || !bootstrapQuery.data) {
+      return;
+    }
+    if (bootstrapQuery.data.dashboard) {
+      queryClient.setQueryData(queryKeys.dashboard(sessionId, range), bootstrapQuery.data.dashboard);
+    }
+    if (bootstrapQuery.data.day) {
+      queryClient.setQueryData(queryKeys.day(sessionId, bootstrapQuery.data.day.date), bootstrapQuery.data.day);
+    }
+    if (bootstrapQuery.data.goal !== undefined) {
+      queryClient.setQueryData(queryKeys.goal(sessionId), bootstrapQuery.data.goal);
+    }
+    if (bootstrapQuery.data.mealTemplates) {
+      queryClient.setQueryData(queryKeys.mealTemplates(sessionId), bootstrapQuery.data.mealTemplates);
+    }
+    if (bootstrapQuery.data.workoutTemplates) {
+      queryClient.setQueryData(queryKeys.workoutTemplates(sessionId), bootstrapQuery.data.workoutTemplates);
+    }
+  }, [bootstrapQuery.data, queryClient, range, sessionId]);
+
+  useEffect(() => {
+    setWorkoutForm((prev) => ({ ...prev, date: selectedDate }));
+    setBodyMetricForm((prev) => ({ ...prev, date: selectedDate }));
+  }, [selectedDate]);
+
+  const dashboard = (dashboardQuery.data ?? null) as DashboardSummary | null;
+  const goal = (goalQuery.data ?? null) as Goal | null;
+  const dayData = (dayQuery.data ?? defaultDaySnapshot(selectedDate)) as DaySnapshot;
+  const mealTemplates = (mealTemplatesQuery.data ?? []) as MealTemplate[];
+  const workoutTemplates = (workoutTemplatesQuery.data ?? []) as WorkoutTemplate[];
+
+  const goalSyncRef = useRef<string>("");
+  useEffect(() => {
+    if (!goal) {
+      return;
+    }
+    const syncKey = [
+      goal.id,
+      goal.weeklyRoutineTarget,
+      goal.dDay ?? "",
+      goal.targetWeightKg ?? "",
+      goal.targetBodyFat ?? ""
+    ].join("|");
+
+    if (goalSyncRef.current === syncKey) {
+      return;
+    }
+    goalSyncRef.current = syncKey;
+    setGoalForm({
+      weeklyRoutineTarget: String(goal.weeklyRoutineTarget),
+      dDay: goal.dDay ?? "",
+      targetWeightKg: goal.targetWeightKg?.toString() ?? "",
+      targetBodyFat: goal.targetBodyFat?.toString() ?? ""
+    });
+  }, [goal]);
+
   const checkinBySlot = useMemo(() => {
     const map = new Map<MealSlot, MealCheckin>();
     for (const item of dayData.mealCheckins) {
@@ -235,146 +511,88 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const activeMealTemplates = useMemo(() => mealTemplates.filter((item) => item.isActive), [mealTemplates]);
   const activeWorkoutTemplates = useMemo(() => workoutTemplates.filter((item) => item.isActive), [workoutTemplates]);
 
-  async function fetchDashboard(sessionId: string, currentRange: RangeKey): Promise<void> {
-    const response = await fetch(
-      `/api/v1/dashboard?sessionId=${encodeURIComponent(sessionId)}&range=${encodeURIComponent(currentRange)}`
-    );
-    if (!response.ok) {
-      const message = await parseErrorMessage(response, "대시보드 조회에 실패했습니다.");
-      setDashboardMessage({ type: "error", text: message });
-      return;
-    }
-    const payload = (await response.json()) as { data?: DashboardSummary };
-    setDashboard(payload.data ?? null);
-    setDashboardMessage(null);
-  }
-
-  async function fetchGoal(sessionId: string): Promise<void> {
-    const response = await fetch(`/api/v1/goals?sessionId=${encodeURIComponent(sessionId)}`);
-    if (!response.ok) {
-      return;
-    }
-    const payload = (await response.json()) as { data?: { goal?: Goal | null } };
-    const current = payload.data?.goal ?? null;
-    setGoal(current);
-    if (current) {
-      setGoalForm({
-        weeklyRoutineTarget: String(current.weeklyRoutineTarget),
-        dDay: current.dDay ?? "",
-        targetWeightKg: current.targetWeightKg?.toString() ?? "",
-        targetBodyFat: current.targetBodyFat?.toString() ?? ""
-      });
-    }
-  }
-
-  async function fetchDay(sessionId: string, date: string): Promise<void> {
-    const response = await fetch(
-      `/api/v1/calendar/day?sessionId=${encodeURIComponent(sessionId)}&date=${encodeURIComponent(date)}`
-    );
-    if (!response.ok) {
-      const message = await parseErrorMessage(response, "기록 조회에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
-      return;
-    }
-    const payload = (await response.json()) as { data?: DayPayload };
-    setDayData(
-      payload.data ?? {
-        date,
-        mealCheckins: [],
-        workoutLogs: [],
-        bodyMetrics: []
-      }
-    );
-  }
-
-  async function fetchTemplates(sessionId: string): Promise<void> {
-    const [mealResponse, workoutResponse] = await Promise.all([
-      fetch(`/api/v1/templates/meals?sessionId=${encodeURIComponent(sessionId)}`),
-      fetch(`/api/v1/templates/workouts?sessionId=${encodeURIComponent(sessionId)}`)
-    ]);
-
-    if (mealResponse.ok) {
-      const payload = (await mealResponse.json()) as { data?: { templates?: MealTemplate[] } };
-      setMealTemplates(payload.data?.templates ?? []);
-    }
-    if (workoutResponse.ok) {
-      const payload = (await workoutResponse.json()) as { data?: { templates?: WorkoutTemplate[] } };
-      setWorkoutTemplates(payload.data?.templates ?? []);
-    }
-  }
-
-  async function bootstrap(sessionId: string): Promise<void> {
-    await Promise.all([
-      fetchDashboard(sessionId, range),
-      fetchGoal(sessionId),
-      fetchDay(sessionId, selectedDate),
-      fetchTemplates(sessionId)
-    ]);
-  }
-
-  async function restoreSession(): Promise<void> {
-    const response = await fetch("/api/v1/auth/guest");
-    if (!response.ok) {
-      return;
-    }
-    const payload = (await response.json()) as { data?: SessionPayload };
-    if (!payload.data) {
-      return;
-    }
-    setSession(payload.data);
-    await bootstrap(payload.data.sessionId);
-  }
-
-  useEffect(() => {
-    void restoreSession();
-  }, []);
-
-  useEffect(() => {
-    if (!session) {
-      return;
-    }
-    void fetchDashboard(session.sessionId, range);
-  }, [range, session?.sessionId]);
-
-  useEffect(() => {
-    if (!session) {
-      return;
-    }
-    void fetchDay(session.sessionId, selectedDate);
-  }, [session?.sessionId, selectedDate]);
-
   async function createGuestSession(): Promise<void> {
     const response = await fetch("/api/v1/auth/guest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({})
     });
+
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "게스트 세션 생성에 실패했습니다.");
-      setSessionMessage({ type: "error", text: message });
+      setSessionMessage({ type: "error", text: await parseErrorMessage(response, "게스트 세션 생성에 실패했습니다.") });
       return;
     }
-    const payload = (await response.json()) as { data?: SessionPayload };
+
+    const payload = (await response.json()) as { data?: Session };
     if (!payload.data) {
       setSessionMessage({ type: "error", text: "세션 응답이 비정상입니다." });
       return;
     }
-    setSession(payload.data);
+
+    queryClient.setQueryData(queryKeys.session, payload.data);
     setSessionMessage({ type: "success", text: "게스트 세션이 시작되었습니다." });
-    await bootstrap(payload.data.sessionId);
+
+    const sid = payload.data.sessionId;
+    void queryClient.prefetchQuery({
+      queryKey: queryKeys.bootstrap(sid, view, selectedDate, range),
+      queryFn: () => fetchBootstrap(sid, view, selectedDate, range)
+    });
+  }
+
+  function applyDayOptimistic(next: DaySnapshot): void {
+    if (!sessionId) {
+      return;
+    }
+    queryClient.setQueryData(queryKeys.day(sessionId, selectedDate), next);
   }
 
   async function upsertMealCheckin(slot: MealSlot, completed: boolean, templateId?: string): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
-    const existing = checkinBySlot.get(slot);
+
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const existing = previous.mealCheckins.find((item) => item.slot === slot && item.isDeleted !== true);
+
+    const optimistic: DaySnapshot = {
+      ...previous,
+      mealCheckins: existing
+        ? previous.mealCheckins.map((item) =>
+            item.id === existing.id
+              ? {
+                  ...item,
+                  completed,
+                  ...(templateId !== undefined ? { templateId } : {})
+                }
+              : item
+          )
+        : [
+            {
+              id: `tmp-mchk-${Date.now()}`,
+              userId: session?.userId ?? "temp-user",
+              date: selectedDate,
+              slot,
+              completed,
+              ...(templateId ? { templateId } : {}),
+              createdAt: new Date().toISOString().slice(0, 10)
+            },
+            ...previous.mealCheckins
+          ]
+    };
+
+    applyDayOptimistic(optimistic);
+    setRecordsMessage({
+      type: "success",
+      text: `${mealSlots.find((item) => item.value === slot)?.label ?? "식단"} 체크인을 저장했습니다.`
+    });
+
     const response = await fetch(existing ? `/api/v1/meal-checkins/${existing.id}` : "/api/v1/meal-checkins", {
       method: existing ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         date: selectedDate,
         slot,
         completed,
@@ -383,42 +601,61 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "식단 체크인 저장에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "식단 체크인 저장에 실패했습니다.") });
       return;
     }
 
-    setRecordsMessage({ type: "success", text: `${mealSlots.find((item) => item.value === slot)?.label ?? "식단"} 체크인을 저장했습니다.` });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    const payload = (await response.json()) as { data?: MealCheckin };
+    if (payload.data) {
+      const current = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? optimistic;
+      applyDayOptimistic({
+        ...current,
+        mealCheckins: [
+          payload.data,
+          ...current.mealCheckins.filter((item) => item.id !== payload.data!.id && !item.id.startsWith("tmp-mchk-"))
+        ]
+      });
+    }
+
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function deleteMealCheckin(slot: MealSlot): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       return;
     }
-    const existing = checkinBySlot.get(slot);
+
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const existing = previous.mealCheckins.find((item) => item.slot === slot && item.isDeleted !== true);
     if (!existing) {
       return;
     }
 
+    applyDayOptimistic({
+      ...previous,
+      mealCheckins: previous.mealCheckins.filter((item) => item.id !== existing.id)
+    });
+
     const response = await fetch(`/api/v1/meal-checkins/${existing.id}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId })
+      body: JSON.stringify({ sessionId })
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "식단 체크인 삭제에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "식단 체크인 삭제에 실패했습니다.") });
       return;
     }
 
     setRecordsMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function saveWorkoutLog(payload?: WorkoutTemplate): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
@@ -445,49 +682,88 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           templateId: workoutForm.templateId || undefined
         };
 
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const optimisticWorkout: WorkoutLog = {
+      id: `tmp-workout-${Date.now()}`,
+      userId: session?.userId ?? "temp-user",
+      date: source.date,
+      bodyPart: source.bodyPart,
+      purpose: source.purpose,
+      tool: source.tool,
+      exerciseName: source.exerciseName,
+      intensity: source.intensity,
+      ...(source.durationMinutes !== undefined ? { durationMinutes: source.durationMinutes } : {}),
+      ...(source.templateId ? { templateId: source.templateId } : {}),
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+
+    applyDayOptimistic({
+      ...previous,
+      workoutLogs: [optimisticWorkout, ...previous.workoutLogs]
+    });
+
     const response = await fetch("/api/v1/workout-logs/quick", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         ...source,
         ...(source.templateId ? { templateId: source.templateId } : {})
       })
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "운동 저장에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "운동 저장에 실패했습니다.") });
       return;
+    }
+
+    const payloadData = (await response.json()) as { data?: WorkoutLog };
+    const saved = payloadData.data;
+    if (saved) {
+      const current = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? previous;
+      applyDayOptimistic({
+        ...current,
+        workoutLogs: [saved, ...current.workoutLogs.filter((item) => !item.id.startsWith("tmp-workout-"))]
+      });
     }
 
     setWorkoutForm((prev) => ({ ...prev, exerciseName: "" }));
     setRecordsMessage({ type: "success", text: "운동을 저장했습니다." });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function deleteWorkoutLog(id: string): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       return;
     }
+
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    applyDayOptimistic({
+      ...previous,
+      workoutLogs: previous.workoutLogs.filter((item) => item.id !== id)
+    });
+
     const response = await fetch(`/api/v1/workout-logs/${id}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId })
+      body: JSON.stringify({ sessionId })
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "운동 삭제에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "운동 삭제에 실패했습니다.") });
       return;
     }
 
     setRecordsMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function saveBodyMetric(): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
@@ -499,11 +775,27 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       return;
     }
 
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const optimisticMetric: BodyMetric = {
+      id: `tmp-metric-${Date.now()}`,
+      userId: session?.userId ?? "temp-user",
+      date: bodyMetricForm.date,
+      ...(weightKg !== undefined ? { weightKg } : {}),
+      ...(bodyFatPct !== undefined ? { bodyFatPct } : {}),
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+
+    applyDayOptimistic({
+      ...previous,
+      bodyMetrics: [optimisticMetric, ...previous.bodyMetrics]
+    });
+
     const response = await fetch("/api/v1/body-metrics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         date: bodyMetricForm.date,
         ...(weightKg !== undefined ? { weightKg } : {}),
         ...(bodyFatPct !== undefined ? { bodyFatPct } : {})
@@ -511,38 +803,55 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "체성분 저장에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "체성분 저장에 실패했습니다.") });
       return;
+    }
+
+    const payloadData = (await response.json()) as { data?: BodyMetric };
+    const saved = payloadData.data;
+    if (saved) {
+      const current = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? previous;
+      applyDayOptimistic({
+        ...current,
+        bodyMetrics: [saved, ...current.bodyMetrics.filter((item) => !item.id.startsWith("tmp-metric-"))]
+      });
     }
 
     setRecordsMessage({ type: "success", text: "체성분 기록을 저장했습니다." });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function deleteBodyMetricLog(id: string): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       return;
     }
+
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    applyDayOptimistic({
+      ...previous,
+      bodyMetrics: previous.bodyMetrics.filter((item) => item.id !== id)
+    });
 
     const response = await fetch(`/api/v1/body-metrics/${id}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId })
+      body: JSON.stringify({ sessionId })
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "체성분 삭제에 실패했습니다.");
-      setRecordsMessage({ type: "error", text: message });
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "체성분 삭제에 실패했습니다.") });
       return;
     }
 
     setRecordsMessage({ type: "info", text: "체성분 기록을 삭제했습니다." });
-    await Promise.all([fetchDay(session.sessionId, selectedDate), fetchDashboard(session.sessionId, range)]);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function saveGoal(): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
       setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
@@ -553,36 +862,49 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       return;
     }
 
+    const goalKey = queryKeys.goal(sessionId);
+    const previous = (queryClient.getQueryData(goalKey) as Goal | null | undefined) ?? goal;
+    const targetWeightKg = parseNumber(goalForm.targetWeightKg);
+    const targetBodyFat = parseNumber(goalForm.targetBodyFat);
+    const optimistic: Goal = {
+      id: previous?.id ?? `tmp-goal-${Date.now()}`,
+      userId: previous?.userId ?? session?.userId ?? "temp-user",
+      weeklyRoutineTarget: Math.trunc(weeklyRoutineTarget),
+      ...(goalForm.dDay.trim() ? { dDay: goalForm.dDay.trim() } : {}),
+      ...(targetWeightKg !== undefined ? { targetWeightKg } : {}),
+      ...(targetBodyFat !== undefined ? { targetBodyFat } : {}),
+      createdAt: previous?.createdAt ?? new Date().toISOString().slice(0, 10)
+    };
+
+    queryClient.setQueryData(goalKey, optimistic);
+
     const response = await fetch("/api/v1/goals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         weeklyRoutineTarget: Math.trunc(weeklyRoutineTarget),
         ...(goalForm.dDay.trim() ? { dDay: goalForm.dDay.trim() } : {}),
-        ...(parseNumber(goalForm.targetWeightKg) !== undefined
-          ? { targetWeightKg: parseNumber(goalForm.targetWeightKg) }
-          : {}),
-        ...(parseNumber(goalForm.targetBodyFat) !== undefined
-          ? { targetBodyFat: parseNumber(goalForm.targetBodyFat) }
-          : {})
+        ...(targetWeightKg !== undefined ? { targetWeightKg } : {}),
+        ...(targetBodyFat !== undefined ? { targetBodyFat } : {})
       })
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "목표 저장에 실패했습니다.");
-      setSettingsMessage({ type: "error", text: message });
+      queryClient.setQueryData(goalKey, previous ?? null);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "목표 저장에 실패했습니다.") });
       return;
     }
 
     const payload = (await response.json()) as { data?: Goal };
-    setGoal(payload.data ?? null);
+    queryClient.setQueryData(goalKey, payload.data ?? null);
     setSettingsMessage({ type: "success", text: "목표를 저장했습니다." });
-    await fetchDashboard(session.sessionId, range);
+    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
   }
 
   async function createMealTemplateAction(): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
+      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
     if (!mealTemplateForm.label.trim()) {
@@ -590,11 +912,25 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       return;
     }
 
+    const key = queryKeys.mealTemplates(sessionId);
+    const previous = (queryClient.getQueryData(key) as MealTemplate[] | undefined) ?? mealTemplates;
+    const tempId = `tmp-meal-template-${Date.now()}`;
+    const optimistic: MealTemplate = {
+      id: tempId,
+      userId: session?.userId ?? "temp-user",
+      label: mealTemplateForm.label.trim(),
+      mealSlot: mealTemplateForm.mealSlot,
+      isActive: true,
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+
+    queryClient.setQueryData(key, [optimistic, ...previous]);
+
     const response = await fetch("/api/v1/templates/meals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         label: mealTemplateForm.label.trim(),
         mealSlot: mealTemplateForm.mealSlot,
         isActive: true
@@ -602,37 +938,80 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "식단 템플릿 저장에 실패했습니다.");
-      setSettingsMessage({ type: "error", text: message });
+      queryClient.setQueryData(key, previous);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "식단 템플릿 저장에 실패했습니다.") });
       return;
+    }
+
+    const payload = (await response.json()) as { data?: MealTemplate };
+    const saved = payload.data;
+    if (saved) {
+      queryClient.setQueryData(
+        key,
+        ((queryClient.getQueryData(key) as MealTemplate[] | undefined) ?? previous).map((item) =>
+          item.id === tempId ? saved : item
+        )
+      );
     }
 
     setMealTemplateForm((prev) => ({ ...prev, label: "" }));
-    await fetchTemplates(session.sessionId);
     setSettingsMessage({ type: "success", text: "식단 템플릿을 저장했습니다." });
   }
 
-  async function deactivateMealTemplate(id: string): Promise<void> {
-    if (!session) {
-      return;
-    }
-    const response = await fetch(`/api/v1/templates/meals/${id}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId })
-    });
-    if (!response.ok) {
-      const message = await parseErrorMessage(response, "식단 템플릿 비활성화에 실패했습니다.");
-      setSettingsMessage({ type: "error", text: message });
+  async function updateMealTemplateAction(
+    id: string,
+    updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>
+  ): Promise<void> {
+    if (!sessionId) {
       return;
     }
 
-    await fetchTemplates(session.sessionId);
+    const key = queryKeys.mealTemplates(sessionId);
+    const previous = (queryClient.getQueryData(key) as MealTemplate[] | undefined) ?? mealTemplates;
+    queryClient.setQueryData(
+      key,
+      previous.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    );
+
+    const response = await fetch(`/api/v1/templates/meals/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        ...(updates.label !== undefined ? { label: updates.label } : {}),
+        ...(updates.mealSlot !== undefined ? { mealSlot: updates.mealSlot } : {}),
+        ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
+      })
+    });
+
+    if (!response.ok) {
+      queryClient.setQueryData(key, previous);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "식단 템플릿 수정에 실패했습니다.") });
+      return;
+    }
+
+    const payload = (await response.json()) as { data?: MealTemplate };
+    if (payload.data) {
+      queryClient.setQueryData(
+        key,
+        previous.map((item) => (item.id === payload.data!.id ? payload.data! : item))
+      );
+    }
+
+    setSettingsMessage({ type: "success", text: "식단 템플릿을 수정했습니다." });
+  }
+
+  async function deactivateMealTemplate(id: string): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    await updateMealTemplateAction(id, { isActive: false });
     setSettingsMessage({ type: "info", text: "식단 템플릿을 비활성화했습니다." });
   }
 
   async function createWorkoutTemplateAction(): Promise<void> {
-    if (!session) {
+    if (!sessionId) {
+      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
       return;
     }
     if (!workoutTemplateForm.label.trim()) {
@@ -641,11 +1020,28 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     const defaultDuration = parseNumber(workoutTemplateForm.defaultDuration);
+    const key = queryKeys.workoutTemplates(sessionId);
+    const previous = (queryClient.getQueryData(key) as WorkoutTemplate[] | undefined) ?? workoutTemplates;
+    const tempId = `tmp-workout-template-${Date.now()}`;
+    const optimistic: WorkoutTemplate = {
+      id: tempId,
+      userId: session?.userId ?? "temp-user",
+      label: workoutTemplateForm.label.trim(),
+      bodyPart: workoutTemplateForm.bodyPart,
+      purpose: workoutTemplateForm.purpose,
+      tool: workoutTemplateForm.tool,
+      ...(defaultDuration !== undefined ? { defaultDuration: Math.trunc(defaultDuration) } : {}),
+      isActive: true,
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+
+    queryClient.setQueryData(key, [optimistic, ...previous]);
+
     const response = await fetch("/api/v1/templates/workouts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: session.sessionId,
+        sessionId,
         label: workoutTemplateForm.label.trim(),
         bodyPart: workoutTemplateForm.bodyPart,
         purpose: workoutTemplateForm.purpose,
@@ -656,35 +1052,139 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     });
 
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "운동 템플릿 저장에 실패했습니다.");
-      setSettingsMessage({ type: "error", text: message });
+      queryClient.setQueryData(key, previous);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "운동 템플릿 저장에 실패했습니다.") });
       return;
+    }
+
+    const payload = (await response.json()) as { data?: WorkoutTemplate };
+    const saved = payload.data;
+    if (saved) {
+      queryClient.setQueryData(
+        key,
+        ((queryClient.getQueryData(key) as WorkoutTemplate[] | undefined) ?? previous).map((item) =>
+          item.id === tempId ? saved : item
+        )
+      );
     }
 
     setWorkoutTemplateForm((prev) => ({ ...prev, label: "" }));
-    await fetchTemplates(session.sessionId);
     setSettingsMessage({ type: "success", text: "운동 템플릿을 저장했습니다." });
   }
 
-  async function deactivateWorkoutTemplate(id: string): Promise<void> {
-    if (!session) {
+  async function updateWorkoutTemplateAction(
+    id: string,
+    updates: Partial<
+      Pick<WorkoutTemplate, "label" | "bodyPart" | "purpose" | "tool" | "defaultDuration" | "isActive">
+    >
+  ): Promise<void> {
+    if (!sessionId) {
       return;
     }
+
+    const key = queryKeys.workoutTemplates(sessionId);
+    const previous = (queryClient.getQueryData(key) as WorkoutTemplate[] | undefined) ?? workoutTemplates;
+
+    queryClient.setQueryData(
+      key,
+      previous.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    );
 
     const response = await fetch(`/api/v1/templates/workouts/${id}`, {
-      method: "DELETE",
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId })
+      body: JSON.stringify({
+        sessionId,
+        ...(updates.label !== undefined ? { label: updates.label } : {}),
+        ...(updates.bodyPart !== undefined ? { bodyPart: updates.bodyPart } : {}),
+        ...(updates.purpose !== undefined ? { purpose: updates.purpose } : {}),
+        ...(updates.tool !== undefined ? { tool: updates.tool } : {}),
+        ...(updates.defaultDuration !== undefined ? { defaultDuration: updates.defaultDuration } : {}),
+        ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
+      })
     });
+
     if (!response.ok) {
-      const message = await parseErrorMessage(response, "운동 템플릿 비활성화에 실패했습니다.");
-      setSettingsMessage({ type: "error", text: message });
+      queryClient.setQueryData(key, previous);
+      setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "운동 템플릿 수정에 실패했습니다.") });
       return;
     }
 
-    await fetchTemplates(session.sessionId);
+    const payload = (await response.json()) as { data?: WorkoutTemplate };
+    if (payload.data) {
+      queryClient.setQueryData(
+        key,
+        previous.map((item) => (item.id === payload.data!.id ? payload.data! : item))
+      );
+    }
+
+    setSettingsMessage({ type: "success", text: "운동 템플릿을 수정했습니다." });
+  }
+
+  async function deactivateWorkoutTemplate(id: string): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    await updateWorkoutTemplateAction(id, { isActive: false });
     setSettingsMessage({ type: "info", text: "운동 템플릿을 비활성화했습니다." });
   }
+
+  function startMealTemplateEdit(item: MealTemplate): void {
+    setEditingMealTemplateId(item.id);
+    setEditingMealTemplateDraft({
+      label: item.label,
+      mealSlot: item.mealSlot
+    });
+  }
+
+  async function saveMealTemplateEdit(): Promise<void> {
+    if (!editingMealTemplateId) {
+      return;
+    }
+    if (!editingMealTemplateDraft.label.trim()) {
+      setSettingsMessage({ type: "error", text: "식단 템플릿 이름을 입력해 주세요." });
+      return;
+    }
+    await updateMealTemplateAction(editingMealTemplateId, {
+      label: editingMealTemplateDraft.label.trim(),
+      mealSlot: editingMealTemplateDraft.mealSlot
+    });
+    setEditingMealTemplateId(null);
+  }
+
+  function startWorkoutTemplateEdit(item: WorkoutTemplate): void {
+    setEditingWorkoutTemplateId(item.id);
+    setEditingWorkoutTemplateDraft({
+      label: item.label,
+      bodyPart: item.bodyPart,
+      purpose: item.purpose,
+      tool: item.tool,
+      defaultDuration: String(item.defaultDuration ?? 30)
+    });
+  }
+
+  async function saveWorkoutTemplateEdit(): Promise<void> {
+    if (!editingWorkoutTemplateId) {
+      return;
+    }
+    if (!editingWorkoutTemplateDraft.label.trim()) {
+      setSettingsMessage({ type: "error", text: "운동 템플릿 이름을 입력해 주세요." });
+      return;
+    }
+
+    await updateWorkoutTemplateAction(editingWorkoutTemplateId, {
+      label: editingWorkoutTemplateDraft.label.trim(),
+      bodyPart: editingWorkoutTemplateDraft.bodyPart,
+      purpose: editingWorkoutTemplateDraft.purpose,
+      tool: editingWorkoutTemplateDraft.tool,
+      ...(parseNumber(editingWorkoutTemplateDraft.defaultDuration) !== undefined
+        ? { defaultDuration: Math.trunc(parseNumber(editingWorkoutTemplateDraft.defaultDuration) ?? 30) }
+        : {})
+    });
+    setEditingWorkoutTemplateId(null);
+  }
+
+  const isRecordsLoading = view === "records" && dayQuery.isPending && !dayQuery.data;
 
   return (
     <>
@@ -695,17 +1195,25 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <p className="header-sub">식단 체크인, 운동, 체성분, 목표를 페이지별로 분리해 관리합니다.</p>
         </div>
         <div className="header-actions">
-          <button type="button" className="button button-primary" onClick={() => void createGuestSession()}>
-            게스트 세션 시작
-          </button>
-          <button
-            type="button"
-            className="button"
-            disabled={!session}
-            onClick={() => setSessionMessage({ type: "info", text: session ? `세션 ID: ${session.sessionId}` : "세션 없음" })}
-          >
-            세션 확인
-          </button>
+          {view === "settings" ? (
+            <>
+              <button type="button" className="button button-primary" onClick={() => void createGuestSession()}>
+                게스트 세션 시작
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={!session}
+                onClick={() =>
+                  setSessionMessage({ type: "info", text: session ? `세션 ID: ${session.sessionId}` : "세션 없음" })
+                }
+              >
+                세션 확인
+              </button>
+            </>
+          ) : (
+            <p className="session-badge">{session ? "세션 연결됨" : "세션 시작은 설정 페이지에서"}</p>
+          )}
         </div>
         {sessionMessage ? <p className={`status status-${sessionMessage.type}`}>{sessionMessage.text}</p> : null}
       </section>
@@ -723,7 +1231,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   onClick={() => setRange(item)}
                   disabled={!session}
                 >
-                  {item}
+                  {rangeLabels[item]}
                 </button>
               ))}
             </div>
@@ -751,10 +1259,10 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           </div>
 
           <div className="trend-panel">
-            <h3>
-              점수 추세 ({dashboard?.granularity ?? "day"} 기준)
-            </h3>
-            {!dashboard || dashboard.buckets.length === 0 ? (
+            <h3>점수 추세 ({dashboard?.granularity ?? "day"} 기준)</h3>
+            {!dashboard && dashboardQuery.isPending ? (
+              <p className="hint">대시보드를 불러오는 중입니다.</p>
+            ) : !dashboard || dashboard.buckets.length === 0 ? (
               <p className="hint">기록이 쌓이면 추세 버킷을 표시합니다.</p>
             ) : (
               <div className="trend-list">
@@ -788,11 +1296,17 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       {view === "records" ? (
         <>
           <section className="card">
-            <div className="section-head">
-              <h2>기록 날짜</h2>
+            <h2>기록 날짜</h2>
+            <div className="form-grid">
               <label className="field compact-field">
                 <span>날짜</span>
-                <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(event) => {
+                    setSelectedDate(event.target.value);
+                  }}
+                />
               </label>
             </div>
             {recordsMessage ? <p className={`status status-${recordsMessage.type}`}>{recordsMessage.text}</p> : null}
@@ -801,51 +1315,54 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <section className="card">
             <h2>식단 체크인</h2>
             <p className="hint">아침/점심/저녁/저녁2 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</p>
-            <div className="slot-grid">
-              {mealSlots.map((slot) => {
-                const current = checkinBySlot.get(slot.value);
-                const slotTemplates = activeMealTemplates.filter((item) => item.mealSlot === slot.value);
-                return (
-                  <article key={slot.value} className="slot-card">
-                    <div className="slot-head">
-                      <h3>{slot.label}</h3>
-                      {current ? <span className="slot-state">{current.completed ? "함" : "안함"}</span> : <span className="slot-state">미기록</span>}
-                    </div>
-                    <div className="slot-actions">
-                      <button type="button" className="button button-primary" onClick={() => void upsertMealCheckin(slot.value, true)}>
-                        함
-                      </button>
-                      <button type="button" className="button" onClick={() => void upsertMealCheckin(slot.value, false)}>
-                        안함
-                      </button>
-                      {current ? (
-                        <button type="button" className="button" onClick={() => void deleteMealCheckin(slot.value)}>
-                          삭제
-                        </button>
-                      ) : null}
-                    </div>
-                    {slotTemplates.length > 0 ? (
-                      <div className="chip-row">
-                        {slotTemplates.map((template) => (
-                          <button
-                            key={template.id}
-                            type="button"
-                            className={
-                              current?.templateId === template.id ? "recommend-chip is-selected" : "recommend-chip"
-                            }
-                            onClick={() => void upsertMealCheckin(slot.value, true, template.id)}
-                          >
-                            {template.label}
-                          </button>
-                        ))}
+
+            {isRecordsLoading ? (
+              <p className="hint">선택 날짜의 기록을 불러오는 중입니다.</p>
+            ) : (
+              <div className="slot-grid">
+                {mealSlots.map((slot) => {
+                  const current = checkinBySlot.get(slot.value);
+                  const slotTemplates = activeMealTemplates.filter((template) => template.mealSlot === slot.value);
+                  return (
+                    <article key={slot.value} className="slot-card">
+                      <div className="slot-head">
+                        <h3>{slot.label}</h3>
+                        {current ? <span className="slot-state">{current.completed ? "함" : "안함"}</span> : <span className="slot-state">미기록</span>}
                       </div>
-                    ) : (
-                      <p className="hint">설정 페이지에서 이 슬롯 템플릿을 추가하면 1탭 선택이 가능합니다.</p>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
+                      <div className="slot-actions">
+                        <button type="button" className="button button-primary" onClick={() => void upsertMealCheckin(slot.value, true)}>
+                          함
+                        </button>
+                        <button type="button" className="button" onClick={() => void upsertMealCheckin(slot.value, false)}>
+                          안함
+                        </button>
+                        {current ? (
+                          <button type="button" className="button" onClick={() => void deleteMealCheckin(slot.value)}>
+                            삭제
+                          </button>
+                        ) : null}
+                      </div>
+                      {slotTemplates.length > 0 ? (
+                        <div className="chip-row">
+                          {slotTemplates.map((template) => (
+                            <button
+                              key={template.id}
+                              type="button"
+                              className={current?.templateId === template.id ? "recommend-chip is-selected" : "recommend-chip"}
+                              onClick={() => void upsertMealCheckin(slot.value, true, template.id)}
+                            >
+                              {template.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="hint">설정 페이지에서 이 슬롯 템플릿을 추가하면 1탭 선택이 가능합니다.</p>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </section>
 
           <section className="card split-grid">
@@ -854,12 +1371,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
               {activeWorkoutTemplates.length > 0 ? (
                 <div className="chip-row">
                   {activeWorkoutTemplates.map((template) => (
-                    <button
-                      key={template.id}
-                      type="button"
-                      className="recommend-chip"
-                      onClick={() => void saveWorkoutLog(template)}
-                    >
+                    <button key={template.id} type="button" className="recommend-chip" onClick={() => void saveWorkoutLog(template)}>
                       {template.label}
                     </button>
                   ))}
@@ -881,9 +1393,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   <span>부위</span>
                   <select
                     value={workoutForm.bodyPart}
-                    onChange={(event) =>
-                      setWorkoutForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))
-                    }
+                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))}
                   >
                     {bodyPartOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -896,9 +1406,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   <span>목적</span>
                   <select
                     value={workoutForm.purpose}
-                    onChange={(event) =>
-                      setWorkoutForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
-                    }
+                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))}
                   >
                     {purposeOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -932,9 +1440,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   <span>강도</span>
                   <select
                     value={workoutForm.intensity}
-                    onChange={(event) =>
-                      setWorkoutForm((prev) => ({ ...prev, intensity: event.target.value as WorkoutIntensity }))
-                    }
+                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, intensity: event.target.value as WorkoutIntensity }))}
                   >
                     {intensityOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -954,7 +1460,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width" onClick={() => void saveWorkoutLog()}>
+              <button type="button" className="button button-primary full-width action-gap" onClick={() => void saveWorkoutLog()}>
                 운동 저장
               </button>
             </article>
@@ -987,7 +1493,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <button type="button" className="button button-primary full-width" onClick={() => void saveBodyMetric()}>
+              <button type="button" className="button button-primary full-width action-gap" onClick={() => void saveBodyMetric()}>
                 체성분 저장
               </button>
             </article>
@@ -1108,9 +1614,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   <span>기본 슬롯</span>
                   <select
                     value={mealTemplateForm.mealSlot}
-                    onChange={(event) =>
-                      setMealTemplateForm((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))
-                    }
+                    onChange={(event) => setMealTemplateForm((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))}
                   >
                     {mealSlots.map((slot) => (
                       <option key={slot.value} value={slot.value}>
@@ -1124,20 +1628,73 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 식단 템플릿 추가
               </button>
               <div className="record-list">
-                {mealTemplates.length === 0 ? (
+                {mealTemplatesQuery.isPending && mealTemplates.length === 0 ? (
+                  <p className="hint">식단 템플릿을 불러오는 중입니다.</p>
+                ) : mealTemplates.length === 0 ? (
                   <p className="hint">등록된 식단 템플릿이 없습니다.</p>
                 ) : (
                   mealTemplates.map((item) => (
-                    <div key={item.id} className="record-item">
-                      <div>
-                        <strong>{item.label}</strong>
-                        <p className="hint">{item.mealSlot} / {item.isActive ? "활성" : "비활성"}</p>
-                      </div>
-                      {item.isActive ? (
-                        <button type="button" className="button" onClick={() => void deactivateMealTemplate(item.id)}>
-                          비활성화
-                        </button>
-                      ) : null}
+                    <div key={item.id} className="record-item record-item-inline">
+                      {editingMealTemplateId === item.id ? (
+                        <>
+                          <div className="inline-edit-grid">
+                            <label className="field">
+                              <span>템플릿명</span>
+                              <input
+                                type="text"
+                                value={editingMealTemplateDraft.label}
+                                onChange={(event) =>
+                                  setEditingMealTemplateDraft((prev) => ({ ...prev, label: event.target.value }))
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>기본 슬롯</span>
+                              <select
+                                value={editingMealTemplateDraft.mealSlot}
+                                onChange={(event) =>
+                                  setEditingMealTemplateDraft((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))
+                                }
+                              >
+                                {mealSlots.map((slot) => (
+                                  <option key={slot.value} value={slot.value}>
+                                    {slot.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <div className="record-actions">
+                            <button type="button" className="button button-primary" onClick={() => void saveMealTemplateEdit()}>
+                              저장
+                            </button>
+                            <button type="button" className="button" onClick={() => setEditingMealTemplateId(null)}>
+                              취소
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <strong>{item.label}</strong>
+                            <p className="hint">
+                              {item.mealSlot} / {item.isActive ? "활성" : "비활성"}
+                            </p>
+                          </div>
+                          <div className="record-actions">
+                            {item.isActive ? (
+                              <button type="button" className="button" onClick={() => startMealTemplateEdit(item)}>
+                                수정
+                              </button>
+                            ) : null}
+                            {item.isActive ? (
+                              <button type="button" className="button" onClick={() => void deactivateMealTemplate(item.id)}>
+                                비활성화
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))
                 )}
@@ -1162,9 +1719,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                     min={1}
                     max={300}
                     value={workoutTemplateForm.defaultDuration}
-                    onChange={(event) =>
-                      setWorkoutTemplateForm((prev) => ({ ...prev, defaultDuration: event.target.value }))
-                    }
+                    onChange={(event) => setWorkoutTemplateForm((prev) => ({ ...prev, defaultDuration: event.target.value }))}
                   />
                 </label>
                 <label className="field">
@@ -1201,9 +1756,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   <span>도구</span>
                   <select
                     value={workoutTemplateForm.tool}
-                    onChange={(event) =>
-                      setWorkoutTemplateForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))
-                    }
+                    onChange={(event) => setWorkoutTemplateForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))}
                   >
                     {toolOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -1217,22 +1770,116 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 운동 템플릿 추가
               </button>
               <div className="record-list">
-                {workoutTemplates.length === 0 ? (
+                {workoutTemplatesQuery.isPending && workoutTemplates.length === 0 ? (
+                  <p className="hint">운동 템플릿을 불러오는 중입니다.</p>
+                ) : workoutTemplates.length === 0 ? (
                   <p className="hint">등록된 운동 템플릿이 없습니다.</p>
                 ) : (
                   workoutTemplates.map((item) => (
-                    <div key={item.id} className="record-item">
-                      <div>
-                        <strong>{item.label}</strong>
-                        <p className="hint">
-                          {item.bodyPart} / {item.purpose} / {item.tool} / {item.defaultDuration ?? 30}분 / {item.isActive ? "활성" : "비활성"}
-                        </p>
-                      </div>
-                      {item.isActive ? (
-                        <button type="button" className="button" onClick={() => void deactivateWorkoutTemplate(item.id)}>
-                          비활성화
-                        </button>
-                      ) : null}
+                    <div key={item.id} className="record-item record-item-inline">
+                      {editingWorkoutTemplateId === item.id ? (
+                        <>
+                          <div className="inline-edit-grid workout-inline-edit-grid">
+                            <label className="field">
+                              <span>템플릿명</span>
+                              <input
+                                type="text"
+                                value={editingWorkoutTemplateDraft.label}
+                                onChange={(event) =>
+                                  setEditingWorkoutTemplateDraft((prev) => ({ ...prev, label: event.target.value }))
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>기본 시간(분)</span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={300}
+                                value={editingWorkoutTemplateDraft.defaultDuration}
+                                onChange={(event) =>
+                                  setEditingWorkoutTemplateDraft((prev) => ({ ...prev, defaultDuration: event.target.value }))
+                                }
+                              />
+                            </label>
+                            <label className="field">
+                              <span>부위</span>
+                              <select
+                                value={editingWorkoutTemplateDraft.bodyPart}
+                                onChange={(event) =>
+                                  setEditingWorkoutTemplateDraft((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))
+                                }
+                              >
+                                {bodyPartOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="field">
+                              <span>목적</span>
+                              <select
+                                value={editingWorkoutTemplateDraft.purpose}
+                                onChange={(event) =>
+                                  setEditingWorkoutTemplateDraft((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
+                                }
+                              >
+                                {purposeOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="field full-span">
+                              <span>도구</span>
+                              <select
+                                value={editingWorkoutTemplateDraft.tool}
+                                onChange={(event) =>
+                                  setEditingWorkoutTemplateDraft((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))
+                                }
+                              >
+                                {toolOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <div className="record-actions">
+                            <button type="button" className="button button-primary" onClick={() => void saveWorkoutTemplateEdit()}>
+                              저장
+                            </button>
+                            <button type="button" className="button" onClick={() => setEditingWorkoutTemplateId(null)}>
+                              취소
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <strong>{item.label}</strong>
+                            <p className="hint">
+                              {item.bodyPart} / {item.purpose} / {item.tool} / {item.defaultDuration ?? 30}분 /{" "}
+                              {item.isActive ? "활성" : "비활성"}
+                            </p>
+                          </div>
+                          <div className="record-actions">
+                            {item.isActive ? (
+                              <button type="button" className="button" onClick={() => startWorkoutTemplateEdit(item)}>
+                                수정
+                              </button>
+                            ) : null}
+                            {item.isActive ? (
+                              <button type="button" className="button" onClick={() => void deactivateWorkoutTemplate(item.id)}>
+                                비활성화
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))
                 )}

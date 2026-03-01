@@ -237,6 +237,21 @@ function getSelectAny(page: NotionPage, keys: string[]): string | undefined {
   return undefined;
 }
 
+function inDateRange(date: string, from: string, to: string): boolean {
+  const key = date.slice(0, 10);
+  return key >= from && key <= to;
+}
+
+function notionUserDateRangeFilter(userId: string, from: string, to: string): Record<string, unknown> {
+  return {
+    and: [
+      { property: "UserId", rich_text: { equals: userId } },
+      { property: "Date", date: { on_or_after: from } },
+      { property: "Date", date: { on_or_before: to } }
+    ]
+  };
+}
+
 function toDeleteMeta(page: NotionPage): Pick<MealLog, "isDeleted" | "deletedAt"> {
   const isDeleted = getCheckbox(page, "IsDeleted");
   const deletedAt = getDate(page, "DeletedAt");
@@ -1004,6 +1019,24 @@ export const repo = {
       .filter((item): item is MealCheckin => item !== null && item.isDeleted !== true);
   },
 
+  async listMealCheckinsByUserInRange(userId: string, from: string, to: string): Promise<MealCheckin[]> {
+    if (isMemoryMode()) {
+      return store.mealCheckins.filter(
+        (item) => item.userId === userId && item.isDeleted !== true && inDateRange(item.date, from, to)
+      );
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const pages = await queryDatabasePages(databases.mealsDbId, {
+      filter: notionUserDateRangeFilter(userId, from, to),
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapMealCheckin)
+      .filter((item): item is MealCheckin => item !== null && item.isDeleted !== true);
+  },
+
   async softDeleteMealCheckin(userId: string, id: string): Promise<boolean> {
     if (isMemoryMode()) {
       const target = store.mealCheckins.find((item) => item.userId === userId && item.id === id);
@@ -1559,6 +1592,24 @@ export const repo = {
       .filter((item): item is MealLog => item !== null && item.isDeleted !== true);
   },
 
+  async listMealsByUserInRange(userId: string, from: string, to: string): Promise<MealLog[]> {
+    if (isMemoryMode()) {
+      return store.meals.filter(
+        (item) => item.userId === userId && item.isDeleted !== true && inDateRange(item.date, from, to)
+      );
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const pages = await queryDatabasePages(databases.mealsDbId, {
+      filter: notionUserDateRangeFilter(userId, from, to),
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapMeal)
+      .filter((item): item is MealLog => item !== null && item.isDeleted !== true);
+  },
+
   async listWorkoutsByUser(userId: string): Promise<WorkoutLog[]> {
     if (isMemoryMode()) {
       return store.workouts.filter((item) => item.userId === userId && item.isDeleted !== true);
@@ -1575,6 +1626,24 @@ export const repo = {
       .filter((item): item is WorkoutLog => item !== null && item.isDeleted !== true);
   },
 
+  async listWorkoutsByUserInRange(userId: string, from: string, to: string): Promise<WorkoutLog[]> {
+    if (isMemoryMode()) {
+      return store.workouts.filter(
+        (item) => item.userId === userId && item.isDeleted !== true && inDateRange(item.date, from, to)
+      );
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const pages = await queryDatabasePages(databases.workoutsDbId, {
+      filter: notionUserDateRangeFilter(userId, from, to),
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapWorkout)
+      .filter((item): item is WorkoutLog => item !== null && item.isDeleted !== true);
+  },
+
   async listBodyMetricsByUser(userId: string): Promise<BodyMetric[]> {
     if (isMemoryMode()) {
       return store.bodyMetrics.filter((item) => item.userId === userId && item.isDeleted !== true);
@@ -1583,6 +1652,24 @@ export const repo = {
     const databases = getNotionDatabases();
     const pages = await queryDatabasePages(databases.bodyMetricsDbId, {
       filter: { property: "UserId", rich_text: { equals: userId } },
+      sorts: [{ property: "CreatedAt", direction: "descending" }]
+    });
+    return pages
+      .map(toPage)
+      .map(mapBodyMetric)
+      .filter((item): item is BodyMetric => item !== null && item.isDeleted !== true);
+  },
+
+  async listBodyMetricsByUserInRange(userId: string, from: string, to: string): Promise<BodyMetric[]> {
+    if (isMemoryMode()) {
+      return store.bodyMetrics.filter(
+        (item) => item.userId === userId && item.isDeleted !== true && inDateRange(item.date, from, to)
+      );
+    }
+    await ensureNotionSchemaValidated();
+    const databases = getNotionDatabases();
+    const pages = await queryDatabasePages(databases.bodyMetricsDbId, {
+      filter: notionUserDateRangeFilter(userId, from, to),
       sorts: [{ property: "CreatedAt", direction: "descending" }]
     });
     return pages

@@ -197,6 +197,34 @@ export const dashboardQuerySchema = z.object({
   range: rangeSchema.default("7d")
 });
 
+export const workspaceViewSchema = z.enum(["dashboard", "records", "settings"]);
+
+export const bootstrapQuerySchema = z.object({
+  sessionId: nonEmptyString.optional(),
+  view: workspaceViewSchema.default("dashboard"),
+  date: isoDateSchema.optional(),
+  range: rangeSchema.default("7d")
+});
+
+export const bootstrapResponseSchema = z.object({
+  session: z
+    .object({
+      sessionId: nonEmptyString,
+      userId: nonEmptyString,
+      isGuest: z.boolean(),
+      createdAt: z.string(),
+      upgradedAt: z.string().optional(),
+      email: z.string().email().optional()
+    })
+    .nullable(),
+  dashboard: z.unknown().optional(),
+  day: z.unknown().optional(),
+  goal: z.unknown().nullable().optional(),
+  mealTemplates: z.array(z.unknown()).optional(),
+  workoutTemplates: z.array(z.unknown()).optional(),
+  fetchedAt: z.string()
+});
+
 export const workoutSuggestionQuerySchema = z.object({
   bodyPart: z.enum(["chest", "back", "legs", "core", "shoulders", "arms", "full_body", "cardio"]),
   purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
@@ -283,6 +311,8 @@ export type GoalQuery = z.infer<typeof goalQuerySchema>;
 export type CalendarDayQuery = z.infer<typeof calendarDayQuerySchema>;
 export type CalendarRangeQuery = z.infer<typeof calendarRangeQuerySchema>;
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>;
+export type BootstrapQuery = z.infer<typeof bootstrapQuerySchema>;
+export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
 export type WorkoutSuggestionQuery = z.infer<typeof workoutSuggestionQuerySchema>;
 export type SoftDeleteRequest = z.infer<typeof softDeleteSchema>;
 export type MealTemplateRequest = z.infer<typeof mealTemplateInputSchema>;

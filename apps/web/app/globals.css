@@ -130,6 +130,17 @@ p {
   gap: 8px;
 }
 
+.session-badge {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .button {
   text-decoration: none;
   border: 1px solid var(--border);
@@ -343,6 +354,10 @@ p {
   margin-top: 14px;
 }
 
+.action-gap {
+  margin-top: 14px;
+}
+
 .form-grid {
   display: grid;
   gap: 10px;
@@ -453,6 +468,29 @@ p {
   gap: 10px;
 }
 
+.record-item-inline {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.record-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.inline-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.workout-inline-edit-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .bottom-nav {
   display: none;
 }
@@ -467,7 +505,8 @@ p {
   }
 
   .split-grid,
-  .form-grid {
+  .form-grid,
+  .inline-edit-grid {
     grid-template-columns: 1fr;
   }
 

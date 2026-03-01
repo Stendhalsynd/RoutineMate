@@ -68,5 +68,17 @@ test("production settings page supports goal/template actions and hides internal
   await workoutArticle.getByLabel("템플릿명").fill(workoutLabel);
   await workoutArticle.getByRole("button", { name: "운동 템플릿 추가" }).click();
   await expect(workoutArticle.getByText(workoutLabel)).toBeVisible({ timeout: 20_000 });
+
+  await page.goto("/records", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "게스트 세션 시작" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "세션 확인" })).toHaveCount(0);
+
+  await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "게스트 세션 시작" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "세션 확인" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Day" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Week" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Month" })).toBeVisible();
+
   await expect(page.getByText("Notion integration is not configured")).toHaveCount(0);
 });

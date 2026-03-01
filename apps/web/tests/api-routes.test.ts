@@ -4,7 +4,9 @@ import { beforeEach, test } from "node:test";
 import { POST as createGuest } from "../app/api/v1/auth/guest/route";
 import { POST as createBodyMetric, PATCH as updateBodyMetric } from "../app/api/v1/body-metrics/route";
 import { GET as getCalendarDay } from "../app/api/v1/calendar/day/route";
+import { GET as getBootstrap } from "../app/api/v1/bootstrap/route";
 import { GET as getDashboard } from "../app/api/v1/dashboard/route";
+import { POST as upsertGoal } from "../app/api/v1/goals/route";
 import { POST as createMeal, PATCH as updateMeal } from "../app/api/v1/meal-logs/quick/route";
 import { POST as createMealCheckin } from "../app/api/v1/meal-checkins/route";
 import { PATCH as patchMealCheckin, DELETE as deleteMealCheckin } from "../app/api/v1/meal-checkins/[id]/route";
@@ -556,4 +558,63 @@ test("meal/workout template CRUD routes work", async () => {
     { params: Promise.resolve({ id: workoutTemplate.data.id }) }
   );
   assert.equal(deletedWorkoutTemplate.status, 200);
+});
+
+test("GET /v1/bootstrap returns view-scoped payload and supports missing session", async () => {
+  const noSessionResponse = await getBootstrap(new Request("http://localhost/api/v1/bootstrap?view=dashboard&range=7d"));
+  assert.equal(noSessionResponse.status, 200);
+  const noSessionPayload = (await noSessionResponse.json()) as { data: { session: null } };
+  assert.equal(noSessionPayload.data.session, null);
+
+  const session = await makeSession();
+
+  const goalResponse = await upsertGoal(
+    new Request("http://localhost/api/v1/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        weeklyRoutineTarget: 4
+      })
+    })
+  );
+  assert.equal(goalResponse.status, 201);
+
+  const mealTemplateResponse = await createMealTemplate(
+    new Request("http://localhost/api/v1/templates/meals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "아침 샐러드",
+        mealSlot: "breakfast",
+        isActive: true
+      })
+    })
+  );
+  assert.equal(mealTemplateResponse.status, 201);
+
+  const recordsResponse = await getBootstrap(
+    new Request(
+      `http://localhost/api/v1/bootstrap?sessionId=${encodeURIComponent(session.sessionId)}&view=records&date=2026-03-01&range=7d`
+    )
+  );
+  assert.equal(recordsResponse.status, 200);
+  const recordsPayload = (await recordsResponse.json()) as {
+    data: {
+      session: { sessionId: string } | null;
+      dashboard?: { range: string };
+      day?: { date: string };
+      mealTemplates?: Array<{ id: string }>;
+      workoutTemplates?: Array<{ id: string }>;
+      fetchedAt: string;
+    };
+  };
+
+  assert.equal(recordsPayload.data.session?.sessionId, session.sessionId);
+  assert.equal(recordsPayload.data.dashboard?.range, "7d");
+  assert.equal(recordsPayload.data.day?.date, "2026-03-01");
+  assert.equal(Array.isArray(recordsPayload.data.mealTemplates), true);
+  assert.equal(Array.isArray(recordsPayload.data.workoutTemplates), true);
+  assert.equal(typeof recordsPayload.data.fetchedAt, "string");
 });

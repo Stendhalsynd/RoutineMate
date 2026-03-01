@@ -9,6 +9,8 @@ export type WorkoutIntensity = "low" | "medium" | "high";
 
 export type RangeKey = "7d" | "30d" | "90d";
 export type DashboardGranularity = "day" | "week" | "month";
+export type WorkspaceView = "dashboard" | "records" | "settings";
+export type UiRangeLabel = "day" | "week" | "month";
 
 export interface ScoringPolicy {
   dietWeight: number;
@@ -222,6 +224,28 @@ export interface DashboardSummary {
   buckets: DashboardBucket[];
   goals: GoalProgress[];
   consistencyMeta?: DashboardConsistencyMeta;
+}
+
+export interface DaySnapshot {
+  date: string;
+  mealCheckins: MealCheckin[];
+  workoutLogs: WorkoutLog[];
+  bodyMetrics: BodyMetric[];
+}
+
+export interface BootstrapPayload {
+  session: Session | null;
+  dashboard?: DashboardSummary;
+  day?: DaySnapshot;
+  goal?: Goal | null;
+  mealTemplates?: MealTemplate[];
+  workoutTemplates?: WorkoutTemplate[];
+  fetchedAt: string;
+}
+
+export interface OptimisticState {
+  pending: boolean;
+  lastError?: string;
 }
 
 export type QuickLogSource = "manual" | "copied_yesterday" | "copied_recent";

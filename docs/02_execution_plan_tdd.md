@@ -189,3 +189,48 @@
 - 30d 주간 평균, 90d 월간 평균 집계 정확성
 - soft delete 후 목록/달력 반영 일치
 - 페이지 분리 후 세션/데이터 로드 정상
+
+---
+
+## 8) S3-6 신규 스프린트 (S3-5 -> S4-1 사이)
+
+### S3-6 목적
+- 페이지 전환 시 상태 초기화 체감을 제거하고, 저장 액션을 낙관적 UI로 즉시 반영한다.
+
+### S3-6 작업 분해
+1. `S3-6-1` Query 전역 계층 도입
+- `QueryClientProvider`를 앱 레이아웃에 연결
+- 세션/대시보드/일자/목표/템플릿을 query key로 관리
+
+2. `S3-6-2` Bootstrap API 추가
+- `GET /v1/bootstrap?view=&date=&range=`
+- 페이지 진입 시 스냅샷으로 다중 요청을 묶어 초기 깜빡임 축소
+
+3. `S3-6-3` 세션 UX 일원화
+- 설정 페이지에서만 `게스트 세션 시작/세션 확인` 버튼 노출
+- 대시보드/기록은 읽기 상태만 노출
+
+4. `S3-6-4` 낙관적 업데이트 + 롤백
+- 대상: meal-checkin, workout, bodyMetric, goal, template create/update/deactivate
+- 실패 시 query cache rollback + 오류 메시지
+
+5. `S3-6-5` 템플릿 인라인 수정
+- 설정 목록 행 단위 `수정/저장/취소`
+- `PATCH /v1/templates/meals/:id`, `PATCH /v1/templates/workouts/:id` 연결
+
+6. `S3-6-6` 라벨/간격 UX 정리
+- 대시보드 토글 표기 `Day/Week/Month`
+- 기록 페이지 저장 버튼 간격 공통 클래스(`action-gap`)로 통일
+
+7. `S3-6-7` 조회 범위 최적화
+- `repository`에 range 조회 메서드 추가
+- `calendar/day`, `dashboard`가 전체 사용자 히스토리 대신 날짜 범위 조회 사용
+
+8. `S3-6-8` 회귀 검증
+- API route test + Playwright 배포 검증 시나리오 확장
+
+### S3-6 테스트 포인트
+- 페이지 전환 후 목표/템플릿/기록 즉시 유지
+- 템플릿 인라인 수정 후 설정/기록 페이지 동시 반영
+- 저장 실패 시 낙관적 상태 롤백
+- 대시보드 토글 라벨/집계 단위 정합성 유지

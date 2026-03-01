@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bootstrapQuerySchema,
+  bootstrapResponseSchema,
   bodyMetricUpdateSchema,
   calendarRangeQuerySchema,
   calendarDayQuerySchema,
@@ -139,4 +141,21 @@ test("calendarRangeQuerySchema enforces from <= to", () => {
     to: "2026-02-27"
   });
   assert.equal(result.success, false);
+});
+
+test("bootstrapQuerySchema parses view/range/date with optional session", () => {
+  const result = bootstrapQuerySchema.safeParse({
+    view: "records",
+    range: "30d",
+    date: "2026-03-01"
+  });
+  assert.equal(result.success, true);
+});
+
+test("bootstrapResponseSchema accepts nullable session payload", () => {
+  const result = bootstrapResponseSchema.safeParse({
+    session: null,
+    fetchedAt: "2026-03-01T12:00:00.000Z"
+  });
+  assert.equal(result.success, true);
 });

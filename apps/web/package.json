@@ -14,6 +14,7 @@
     "@routinemate/api-contract": "0.1.0",
     "@routinemate/domain": "0.1.0",
     "@routinemate/ui": "0.1.0",
+    "@tanstack/react-query": "^5.90.21",
     "next": "15.1.0",
     "react": "19.0.0",
     "react-dom": "19.0.0"

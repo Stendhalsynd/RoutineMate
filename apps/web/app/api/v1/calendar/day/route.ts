@@ -26,10 +26,10 @@ export async function GET(request: Request) {
       return notFound("Session was not found.");
     }
 
-    const mealLogs = await repo.listMealsByUser(session.userId);
-    const mealCheckins = await repo.listMealCheckinsByUser(session.userId);
-    const workoutLogs = await repo.listWorkoutsByUser(session.userId);
-    const bodyMetrics = await repo.listBodyMetricsByUser(session.userId);
+    const mealLogs = await repo.listMealsByUserInRange(session.userId, parsed.data.date, parsed.data.date);
+    const mealCheckins = await repo.listMealCheckinsByUserInRange(session.userId, parsed.data.date, parsed.data.date);
+    const workoutLogs = await repo.listWorkoutsByUserInRange(session.userId, parsed.data.date, parsed.data.date);
+    const bodyMetrics = await repo.listBodyMetricsByUserInRange(session.userId, parsed.data.date, parsed.data.date);
 
     const dayMealCheckins = mealCheckins.filter((item) => sameDay(item.date, parsed.data.date));
     const mergedMealLogs = new Map<string, MealLog>();
