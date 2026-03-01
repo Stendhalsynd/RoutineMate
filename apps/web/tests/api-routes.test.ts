@@ -6,7 +6,21 @@ import { POST as createBodyMetric, PATCH as updateBodyMetric } from "../app/api/
 import { GET as getCalendarDay } from "../app/api/v1/calendar/day/route";
 import { GET as getDashboard } from "../app/api/v1/dashboard/route";
 import { POST as createMeal, PATCH as updateMeal } from "../app/api/v1/meal-logs/quick/route";
+import { POST as createMealCheckin } from "../app/api/v1/meal-checkins/route";
+import { PATCH as patchMealCheckin, DELETE as deleteMealCheckin } from "../app/api/v1/meal-checkins/[id]/route";
+import { GET as getMealTemplates, POST as createMealTemplate } from "../app/api/v1/templates/meals/route";
+import {
+  PATCH as patchMealTemplate,
+  DELETE as deleteMealTemplate
+} from "../app/api/v1/templates/meals/[id]/route";
+import { GET as getWorkoutTemplates, POST as createWorkoutTemplate } from "../app/api/v1/templates/workouts/route";
+import {
+  PATCH as patchWorkoutTemplate,
+  DELETE as deleteWorkoutTemplate
+} from "../app/api/v1/templates/workouts/[id]/route";
 import { POST as createWorkout, PATCH as updateWorkout } from "../app/api/v1/workout-logs/quick/route";
+import { DELETE as deleteWorkout } from "../app/api/v1/workout-logs/[id]/route";
+import { DELETE as deleteBodyMetric } from "../app/api/v1/body-metrics/[id]/route";
 import { repo } from "../src/lib/repository";
 
 type SessionResponse = { data: { sessionId: string; userId: string } };
@@ -321,4 +335,225 @@ test("PATCH /v1/body-metrics returns 404 for unknown log id", async () => {
   );
 
   assert.equal(patchResponse.status, 404);
+});
+
+test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
+  const session = await makeSession();
+
+  const createdResponse = await createMealCheckin(
+    new Request("http://localhost/api/v1/meal-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        slot: "dinner2",
+        completed: true
+      })
+    })
+  );
+  assert.equal(createdResponse.status, 201);
+  const created = (await createdResponse.json()) as { data: { id: string; slot: string } };
+  assert.equal(created.data.slot, "dinner2");
+
+  const patchedResponse = await patchMealCheckin(
+    new Request(`http://localhost/api/v1/meal-checkins/${created.data.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        completed: false
+      })
+    }),
+    { params: Promise.resolve({ id: created.data.id }) }
+  );
+  assert.equal(patchedResponse.status, 200);
+
+  const deletedResponse = await deleteMealCheckin(
+    new Request(`http://localhost/api/v1/meal-checkins/${created.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: created.data.id }) }
+  );
+  assert.equal(deletedResponse.status, 200);
+
+  const dayResponse = await getCalendarDay(
+    new Request(
+      `http://localhost/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=2026-03-01`
+    )
+  );
+  const dayPayload = (await dayResponse.json()) as {
+    data: { mealCheckins: Array<{ id: string }> };
+  };
+  assert.equal(dayPayload.data.mealCheckins.length, 0);
+});
+
+test("DELETE /v1/workout-logs/:id and /v1/body-metrics/:id soft-delete records", async () => {
+  const session = await makeSession();
+
+  const workoutResponse = await createWorkout(
+    new Request("http://localhost/api/v1/workout-logs/quick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        exerciseName: "서킷 트레이닝",
+        durationMinutes: 30,
+        intensity: "medium"
+      })
+    })
+  );
+  const workout = (await workoutResponse.json()) as { data: { id: string } };
+
+  const metricResponse = await createBodyMetric(
+    new Request("http://localhost/api/v1/body-metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        weightKg: 72,
+        bodyFatPct: 20
+      })
+    })
+  );
+  const metric = (await metricResponse.json()) as { data: { id: string } };
+
+  const deletedWorkout = await deleteWorkout(
+    new Request(`http://localhost/api/v1/workout-logs/${workout.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: workout.data.id }) }
+  );
+  assert.equal(deletedWorkout.status, 200);
+
+  const deletedMetric = await deleteBodyMetric(
+    new Request(`http://localhost/api/v1/body-metrics/${metric.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: metric.data.id }) }
+  );
+  assert.equal(deletedMetric.status, 200);
+
+  const dayResponse = await getCalendarDay(
+    new Request(
+      `http://localhost/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=2026-03-01`
+    )
+  );
+  const dayPayload = (await dayResponse.json()) as {
+    data: { workoutLogs: Array<{ id: string }>; bodyMetrics: Array<{ id: string }> };
+  };
+  assert.equal(dayPayload.data.workoutLogs.length, 0);
+  assert.equal(dayPayload.data.bodyMetrics.length, 0);
+});
+
+test("meal/workout template CRUD routes work", async () => {
+  const session = await makeSession();
+
+  const createdMealTemplate = await createMealTemplate(
+    new Request("http://localhost/api/v1/templates/meals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "닭가슴살 도시락",
+        mealSlot: "lunch",
+        isActive: true
+      })
+    })
+  );
+  assert.equal(createdMealTemplate.status, 201);
+  const mealTemplate = (await createdMealTemplate.json()) as { data: { id: string } };
+
+  const patchedMealTemplate = await patchMealTemplate(
+    new Request(`http://localhost/api/v1/templates/meals/${mealTemplate.data.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "닭가슴살 샐러드",
+        isActive: true
+      })
+    }),
+    { params: Promise.resolve({ id: mealTemplate.data.id }) }
+  );
+  assert.equal(patchedMealTemplate.status, 200);
+
+  const createdWorkoutTemplate = await createWorkoutTemplate(
+    new Request("http://localhost/api/v1/templates/workouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "푸시 데이",
+        bodyPart: "chest",
+        purpose: "muscle_gain",
+        tool: "barbell",
+        defaultDuration: 45,
+        isActive: true
+      })
+    })
+  );
+  assert.equal(createdWorkoutTemplate.status, 201);
+  const workoutTemplate = (await createdWorkoutTemplate.json()) as { data: { id: string } };
+
+  const patchedWorkoutTemplate = await patchWorkoutTemplate(
+    new Request(`http://localhost/api/v1/templates/workouts/${workoutTemplate.data.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "푸시 루틴",
+        isActive: true
+      })
+    }),
+    { params: Promise.resolve({ id: workoutTemplate.data.id }) }
+  );
+  assert.equal(patchedWorkoutTemplate.status, 200);
+
+  const listedMealTemplates = await getMealTemplates(
+    new Request(`http://localhost/api/v1/templates/meals?sessionId=${encodeURIComponent(session.sessionId)}`)
+  );
+  const listedMealPayload = (await listedMealTemplates.json()) as {
+    data: { templates: Array<{ id: string }> };
+  };
+  assert.equal(listedMealPayload.data.templates.length, 1);
+
+  const listedWorkoutTemplates = await getWorkoutTemplates(
+    new Request(`http://localhost/api/v1/templates/workouts?sessionId=${encodeURIComponent(session.sessionId)}`)
+  );
+  const listedWorkoutPayload = (await listedWorkoutTemplates.json()) as {
+    data: { templates: Array<{ id: string }> };
+  };
+  assert.equal(listedWorkoutPayload.data.templates.length, 1);
+
+  const deletedMealTemplate = await deleteMealTemplate(
+    new Request(`http://localhost/api/v1/templates/meals/${mealTemplate.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: mealTemplate.data.id }) }
+  );
+  assert.equal(deletedMealTemplate.status, 200);
+
+  const deletedWorkoutTemplate = await deleteWorkoutTemplate(
+    new Request(`http://localhost/api/v1/templates/workouts/${workoutTemplate.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: workoutTemplate.data.id }) }
+  );
+  assert.equal(deletedWorkoutTemplate.status, 200);
 });

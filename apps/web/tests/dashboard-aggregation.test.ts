@@ -62,11 +62,15 @@ test("aggregateDashboard summarizes data in selected range", () => {
   });
 
   assert.equal(summary.range, "7d");
+  assert.equal(summary.granularity, "day");
   assert.equal(summary.totalMeals, 1);
   assert.equal(summary.totalWorkouts, 1);
   assert.equal(summary.latestWeightKg, 69);
   assert.equal(summary.goals.length, 1);
   assert.equal(summary.daily.length, 7);
+  assert.equal(summary.buckets.length, 7);
+  assert.equal(summary.buckets[0]?.key, "2026-02-21");
+  assert.equal(summary.buckets[6]?.key, "2026-02-27");
   assert.equal(summary.consistencyMeta?.range, "7d");
   assert.equal(summary.consistencyMeta?.coveredDays, 7);
   assert.equal(summary.consistencyMeta?.windowStart, "2026-02-21");
@@ -152,9 +156,12 @@ test("aggregateDashboard aligns totals with range window for 30d and 90d", () =>
     ...baseInput,
     range: "30d"
   });
+  assert.equal(summary30.granularity, "week");
   assert.equal(summary30.totalMeals, 2);
   assert.equal(summary30.totalWorkouts, 1);
   assert.equal(summary30.daily.length, 30);
+  assert.ok(summary30.buckets.length >= 4);
+  assert.ok(summary30.buckets.every((item) => item.key.includes("-W")));
   assert.equal(summary30.consistencyMeta?.windowStart, "2026-01-31");
   assert.equal(summary30.consistencyMeta?.windowEnd, "2026-03-01");
   assert.equal(summary30.consistencyMeta?.coveredDays, 30);
@@ -167,9 +174,12 @@ test("aggregateDashboard aligns totals with range window for 30d and 90d", () =>
     ...baseInput,
     range: "90d"
   });
+  assert.equal(summary90.granularity, "month");
   assert.equal(summary90.totalMeals, 3);
   assert.equal(summary90.totalWorkouts, 2);
   assert.equal(summary90.daily.length, 90);
+  assert.ok(summary90.buckets.length >= 3);
+  assert.ok(summary90.buckets.every((item) => /^\d{4}-\d{2}$/u.test(item.key)));
   assert.equal(summary90.consistencyMeta?.windowStart, "2025-12-02");
   assert.equal(summary90.consistencyMeta?.windowEnd, "2026-03-01");
   assert.equal(summary90.consistencyMeta?.coveredDays, 90);
