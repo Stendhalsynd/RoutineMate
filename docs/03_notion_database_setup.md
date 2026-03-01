@@ -2,15 +2,35 @@
 
 ## 1) 사전 준비
 
+### S3-5 기준 변경 요약 (기존 설정 대비)
+
+### 기존 DB에서 추가/변경해야 할 필드
+- `Meals`: `MealSlot(Select)`, `Completed(Checkbox)`, `TemplateId(Rich text)`, `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
+- `Workouts`: `TemplateId(Rich text)`, `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
+- `BodyMetrics`: `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
+- `FoodLabel`, `MealType`, `PortionSize`는 하위호환 필드로 유지 가능(필수 아님)
+
+### 새로 추가해야 할 DB 페이지
+- `RoutineMate MealTemplates`
+- `RoutineMate WorkoutTemplates`
+
+### .env / Vercel 환경변수 추가
+- `NOTION_DB_MEAL_TEMPLATES`
+- `NOTION_DB_WORKOUT_TEMPLATES`
+
+템플릿 관리 기능(`/settings` 템플릿 CRUD)을 사용하려면 위 2개를 반드시 설정해야 합니다.
+
 1. Notion에서 `Internal Integration` 생성
 - Integration 생성 후 `Internal Integration Token` 확보
 
-2. 아래 5개 데이터베이스 생성
+2. 아래 7개 데이터베이스 생성
 - `RoutineMate Sessions`
 - `RoutineMate Meals`
 - `RoutineMate Workouts`
 - `RoutineMate BodyMetrics`
 - `RoutineMate Goals`
+- `RoutineMate MealTemplates`
+- `RoutineMate WorkoutTemplates`
 
 3. 각 데이터베이스를 Integration에 공유
 - DB 우측 상단 `...` -> `Connections` -> 생성한 Integration 연결
@@ -26,8 +46,8 @@
 - `NOTION_DB_WORKOUTS=...`
 - `NOTION_DB_BODY_METRICS=...`
 - `NOTION_DB_GOALS=...`
-- `NOTION_DB_MEAL_TEMPLATES=...` (선택, 권장)
-- `NOTION_DB_WORKOUT_TEMPLATES=...` (선택, 권장)
+- `NOTION_DB_MEAL_TEMPLATES=...`
+- `NOTION_DB_WORKOUT_TEMPLATES=...`
 
 ---
 
@@ -63,7 +83,7 @@
 | `Completed` | `Checkbox` | Y | 체크인 완료 여부 |
 | `TemplateId` | `Rich text` | N | 연결된 식단 템플릿 ID |
 | `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
-| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
+| `DeletedAt` | `Date` | Y | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## Workouts DB (`NOTION_DB_WORKOUTS`)
@@ -85,7 +105,7 @@
 | `WeightKg` | `Number` | N | 중량 |
 | `DurationMinutes` | `Number` | N | 운동 시간 |
 | `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
-| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
+| `DeletedAt` | `Date` | Y | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## BodyMetrics DB (`NOTION_DB_BODY_METRICS`)
@@ -99,7 +119,7 @@
 | `WeightKg` | `Number` | N | 체중 |
 | `BodyFatPct` | `Number` | N | 체지방률 |
 | `IsDeleted` | `Checkbox` | Y | 소프트 삭제 여부 |
-| `DeletedAt` | `Date` | N | 소프트 삭제 일시 |
+| `DeletedAt` | `Date` | Y | 소프트 삭제 일시 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
 ## Goals DB (`NOTION_DB_GOALS`)
@@ -174,5 +194,32 @@
 
 ## 6) 스키마 오류 트러블슈팅
 - 앱은 시작 시 필수 컬럼 존재를 검사합니다.
-- 컬럼명이 다르면 `필드명 불일치: Meals.FoodLabel` 같은 메시지를 API 에러로 반환합니다.
-- 예: `FoodLabel` 오타(`FootLabel`)가 있으면 식단 저장이 실패합니다.
+- 컬럼명이 다르면 `필드명 불일치: <DB>.<Field>` 형식으로 API 에러를 반환합니다.
+- 예: `Meals.DeletedAt` 누락 시 삭제 API 호출에서 실패합니다.
+
+참고:
+- `FoodLabel`은 현재 하위호환용 optional 필드입니다.
+- 다만 과거 데이터/호환성을 위해 컬럼을 남겨두는 것은 권장합니다.
+
+## 7) 자동 점검 스크립트
+
+Notion 실제 DB 컬럼이 문서/코드 스키마와 맞는지 API로 자동 점검합니다.
+
+실행:
+```bash
+npm run notion:schema:check
+```
+
+동작:
+- `.env`를 로드한 뒤 Notion `GET /v1/databases/{id}` 호출
+- DB별 required 필드 누락 시 `FAIL` + 종료코드 1
+- optional 필드 누락 시 `WARN`만 출력
+
+점검 대상 env:
+- `NOTION_DB_SESSIONS`
+- `NOTION_DB_MEALS`
+- `NOTION_DB_WORKOUTS`
+- `NOTION_DB_BODY_METRICS`
+- `NOTION_DB_GOALS`
+- `NOTION_DB_MEAL_TEMPLATES`
+- `NOTION_DB_WORKOUT_TEMPLATES`

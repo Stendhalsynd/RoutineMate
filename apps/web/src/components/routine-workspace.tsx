@@ -1044,198 +1044,202 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       ) : null}
 
       {view === "settings" ? (
-        <section className="card split-grid">
-          <article>
-            <h2>목표 설정</h2>
-            <p className="hint">목표는 설정 페이지에서만 관리하고, 대시보드에서는 읽기 전용으로 표시합니다.</p>
-            {settingsMessage ? <p className={`status status-${settingsMessage.type}`}>{settingsMessage.text}</p> : null}
-            <div className="form-grid">
-              <label className="field">
-                <span>주간 루틴 목표(회)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={21}
-                  value={goalForm.weeklyRoutineTarget}
-                  onChange={(event) => setGoalForm((prev) => ({ ...prev, weeklyRoutineTarget: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>D-day</span>
-                <input
-                  type="date"
-                  value={goalForm.dDay}
-                  onChange={(event) => setGoalForm((prev) => ({ ...prev, dDay: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>목표 체중(kg)</span>
-                <input
-                  type="number"
-                  value={goalForm.targetWeightKg}
-                  onChange={(event) => setGoalForm((prev) => ({ ...prev, targetWeightKg: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>목표 체지방(%)</span>
-                <input
-                  type="number"
-                  value={goalForm.targetBodyFat}
-                  onChange={(event) => setGoalForm((prev) => ({ ...prev, targetBodyFat: event.target.value }))}
-                />
-              </label>
-            </div>
-            <button type="button" className="button button-primary full-width" onClick={() => void saveGoal()}>
-              목표 저장
-            </button>
-          </article>
+        <div className="settings-stack">
+          <section className="card settings-goal-card">
+            <article>
+              <h2>목표 설정</h2>
+              <p className="hint">목표는 설정 페이지에서만 관리하고, 대시보드에서는 읽기 전용으로 표시합니다.</p>
+              {settingsMessage ? <p className={`status status-${settingsMessage.type}`}>{settingsMessage.text}</p> : null}
+              <div className="form-grid">
+                <label className="field">
+                  <span>주간 루틴 목표(회)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={21}
+                    value={goalForm.weeklyRoutineTarget}
+                    onChange={(event) => setGoalForm((prev) => ({ ...prev, weeklyRoutineTarget: event.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>D-day</span>
+                  <input
+                    type="date"
+                    value={goalForm.dDay}
+                    onChange={(event) => setGoalForm((prev) => ({ ...prev, dDay: event.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>목표 체중(kg)</span>
+                  <input
+                    type="number"
+                    value={goalForm.targetWeightKg}
+                    onChange={(event) => setGoalForm((prev) => ({ ...prev, targetWeightKg: event.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>목표 체지방(%)</span>
+                  <input
+                    type="number"
+                    value={goalForm.targetBodyFat}
+                    onChange={(event) => setGoalForm((prev) => ({ ...prev, targetBodyFat: event.target.value }))}
+                  />
+                </label>
+              </div>
+              <button type="button" className="button button-primary full-width" onClick={() => void saveGoal()}>
+                목표 저장
+              </button>
+            </article>
+          </section>
 
-          <article>
-            <h2>식단 템플릿</h2>
-            <div className="form-grid">
-              <label className="field full-span">
-                <span>템플릿명</span>
-                <input
-                  type="text"
-                  value={mealTemplateForm.label}
-                  onChange={(event) => setMealTemplateForm((prev) => ({ ...prev, label: event.target.value }))}
-                />
-              </label>
-              <label className="field full-span">
-                <span>기본 슬롯</span>
-                <select
-                  value={mealTemplateForm.mealSlot}
-                  onChange={(event) =>
-                    setMealTemplateForm((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))
-                  }
-                >
-                  {mealSlots.map((slot) => (
-                    <option key={slot.value} value={slot.value}>
-                      {slot.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <button type="button" className="button button-primary full-width" onClick={() => void createMealTemplateAction()}>
-              식단 템플릿 추가
-            </button>
-            <div className="record-list">
-              {mealTemplates.length === 0 ? (
-                <p className="hint">등록된 식단 템플릿이 없습니다.</p>
-              ) : (
-                mealTemplates.map((item) => (
-                  <div key={item.id} className="record-item">
-                    <div>
-                      <strong>{item.label}</strong>
-                      <p className="hint">{item.mealSlot} / {item.isActive ? "활성" : "비활성"}</p>
+          <section className="card split-grid settings-template-grid">
+            <article>
+              <h2>식단 템플릿</h2>
+              <div className="form-grid">
+                <label className="field full-span">
+                  <span>템플릿명</span>
+                  <input
+                    type="text"
+                    value={mealTemplateForm.label}
+                    onChange={(event) => setMealTemplateForm((prev) => ({ ...prev, label: event.target.value }))}
+                  />
+                </label>
+                <label className="field full-span">
+                  <span>기본 슬롯</span>
+                  <select
+                    value={mealTemplateForm.mealSlot}
+                    onChange={(event) =>
+                      setMealTemplateForm((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))
+                    }
+                  >
+                    {mealSlots.map((slot) => (
+                      <option key={slot.value} value={slot.value}>
+                        {slot.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button type="button" className="button button-primary full-width" onClick={() => void createMealTemplateAction()}>
+                식단 템플릿 추가
+              </button>
+              <div className="record-list">
+                {mealTemplates.length === 0 ? (
+                  <p className="hint">등록된 식단 템플릿이 없습니다.</p>
+                ) : (
+                  mealTemplates.map((item) => (
+                    <div key={item.id} className="record-item">
+                      <div>
+                        <strong>{item.label}</strong>
+                        <p className="hint">{item.mealSlot} / {item.isActive ? "활성" : "비활성"}</p>
+                      </div>
+                      {item.isActive ? (
+                        <button type="button" className="button" onClick={() => void deactivateMealTemplate(item.id)}>
+                          비활성화
+                        </button>
+                      ) : null}
                     </div>
-                    {item.isActive ? (
-                      <button type="button" className="button" onClick={() => void deactivateMealTemplate(item.id)}>
-                        비활성화
-                      </button>
-                    ) : null}
-                  </div>
-                ))
-              )}
-            </div>
-          </article>
+                  ))
+                )}
+              </div>
+            </article>
 
-          <article className="full-span">
-            <h2>운동 템플릿</h2>
-            <div className="form-grid">
-              <label className="field">
-                <span>템플릿명</span>
-                <input
-                  type="text"
-                  value={workoutTemplateForm.label}
-                  onChange={(event) => setWorkoutTemplateForm((prev) => ({ ...prev, label: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>기본 시간(분)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={300}
-                  value={workoutTemplateForm.defaultDuration}
-                  onChange={(event) =>
-                    setWorkoutTemplateForm((prev) => ({ ...prev, defaultDuration: event.target.value }))
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>부위</span>
-                <select
-                  value={workoutTemplateForm.bodyPart}
-                  onChange={(event) =>
-                    setWorkoutTemplateForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))
-                  }
-                >
-                  {bodyPartOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>목적</span>
-                <select
-                  value={workoutTemplateForm.purpose}
-                  onChange={(event) =>
-                    setWorkoutTemplateForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
-                  }
-                >
-                  {purposeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field full-span">
-                <span>도구</span>
-                <select
-                  value={workoutTemplateForm.tool}
-                  onChange={(event) =>
-                    setWorkoutTemplateForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))
-                  }
-                >
-                  {toolOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <button type="button" className="button button-primary full-width" onClick={() => void createWorkoutTemplateAction()}>
-              운동 템플릿 추가
-            </button>
-            <div className="record-list">
-              {workoutTemplates.length === 0 ? (
-                <p className="hint">등록된 운동 템플릿이 없습니다.</p>
-              ) : (
-                workoutTemplates.map((item) => (
-                  <div key={item.id} className="record-item">
-                    <div>
-                      <strong>{item.label}</strong>
-                      <p className="hint">
-                        {item.bodyPart} / {item.purpose} / {item.tool} / {item.defaultDuration ?? 30}분 / {item.isActive ? "활성" : "비활성"}
-                      </p>
+            <article>
+              <h2>운동 템플릿</h2>
+              <div className="form-grid">
+                <label className="field">
+                  <span>템플릿명</span>
+                  <input
+                    type="text"
+                    value={workoutTemplateForm.label}
+                    onChange={(event) => setWorkoutTemplateForm((prev) => ({ ...prev, label: event.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>기본 시간(분)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    value={workoutTemplateForm.defaultDuration}
+                    onChange={(event) =>
+                      setWorkoutTemplateForm((prev) => ({ ...prev, defaultDuration: event.target.value }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>부위</span>
+                  <select
+                    value={workoutTemplateForm.bodyPart}
+                    onChange={(event) =>
+                      setWorkoutTemplateForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))
+                    }
+                  >
+                    {bodyPartOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>목적</span>
+                  <select
+                    value={workoutTemplateForm.purpose}
+                    onChange={(event) =>
+                      setWorkoutTemplateForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))
+                    }
+                  >
+                    {purposeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field full-span">
+                  <span>도구</span>
+                  <select
+                    value={workoutTemplateForm.tool}
+                    onChange={(event) =>
+                      setWorkoutTemplateForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))
+                    }
+                  >
+                    {toolOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button type="button" className="button button-primary full-width" onClick={() => void createWorkoutTemplateAction()}>
+                운동 템플릿 추가
+              </button>
+              <div className="record-list">
+                {workoutTemplates.length === 0 ? (
+                  <p className="hint">등록된 운동 템플릿이 없습니다.</p>
+                ) : (
+                  workoutTemplates.map((item) => (
+                    <div key={item.id} className="record-item">
+                      <div>
+                        <strong>{item.label}</strong>
+                        <p className="hint">
+                          {item.bodyPart} / {item.purpose} / {item.tool} / {item.defaultDuration ?? 30}분 / {item.isActive ? "활성" : "비활성"}
+                        </p>
+                      </div>
+                      {item.isActive ? (
+                        <button type="button" className="button" onClick={() => void deactivateWorkoutTemplate(item.id)}>
+                          비활성화
+                        </button>
+                      ) : null}
                     </div>
-                    {item.isActive ? (
-                      <button type="button" className="button" onClick={() => void deactivateWorkoutTemplate(item.id)}>
-                        비활성화
-                      </button>
-                    ) : null}
-                  </div>
-                ))
-              )}
-            </div>
-          </article>
-        </section>
+                  ))
+                )}
+              </div>
+            </article>
+          </section>
+        </div>
       ) : null}
     </>
   );

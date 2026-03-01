@@ -326,6 +326,19 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-stack {
+  display: grid;
+  gap: 22px;
+}
+
+.settings-goal-card {
+  max-width: 760px;
+}
+
+.settings-template-grid {
+  align-items: start;
+}
+
 .form-grid {
   display: grid;
   gap: 10px;
