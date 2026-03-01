@@ -57,6 +57,11 @@ S4 리마인더 기능을 사용하려면 `NOTION_DB_REMINDER_SETTINGS`가 필�
 - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...`
 - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=...`
 
+APK 릴리즈(S4-4) 참고:
+- 로컬 Gradle 빌드 전략을 사용하며, Android SDK/JDK가 필요합니다.
+- GitHub Release 자동 업로드를 사용하면 `GITHUB_TOKEN`(또는 `gh auth login`)이 필요합니다.
+- 로컬 APK 빌드는 Android SDK/JDK 환경변수(`ANDROID_HOME` 또는 `ANDROID_SDK_ROOT`)가 필요합니다.
+
 ---
 
 ## 2) 데이터베이스별 컬럼 스키마 (Notion 타입 준수)

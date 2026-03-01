@@ -138,7 +138,7 @@
 ### 배포
 - Web/API: Vercel.
 - DB: Neon/Supabase/RDS.
-- 모바일: EAS Build(Android APK/AAB) 또는 Flutter build pipeline.
+- 모바일: React Native(Expo) CLI + 로컬 Android Gradle 빌드 또는 Flutter build pipeline.
 
 ---
 
@@ -276,5 +276,5 @@
 
 ### S4-4 웹+APK 동시 릴리즈
 - 웹: Vercel + Playwright 배포 검증 루프.
-- 모바일: EAS APK 빌드(`preview`, `release`) + GitHub Release 첨부.
+- 모바일: 로컬 Android Gradle 빌드(`preview`, `release`) + GitHub Release 첨부.
 - 릴리즈 노트는 Discord webhook으로 동시 공유.
