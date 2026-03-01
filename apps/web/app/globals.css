@@ -275,6 +275,57 @@ p {
   font-weight: 700;
 }
 
+.trend-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.trend-panel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.trend-list {
+  display: grid;
+  gap: 7px;
+}
+
+.trend-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+}
+
+.trend-date {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trend-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e7ece9;
+  overflow: hidden;
+}
+
+.trend-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4dbd8f 0%, #1f6f5f 100%);
+}
+
+.trend-score {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .calendar-grid {
   display: grid;
   gap: 10px;
@@ -370,6 +421,32 @@ p {
   background: #f7faf7;
   border-radius: 10px;
   padding: 10px;
+}
+
+.goal-card-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.goal-progress-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.goal-progress-card h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.goal-progress-value {
+  font-size: 22px;
+  font-weight: 800;
 }
 
 .timeline-date-field {

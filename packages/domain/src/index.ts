@@ -128,10 +128,17 @@ export interface GoalProgress {
   completedRoutineCount: number;
   averageWeeklyWorkouts: number;
   routineCompletionRate: number;
+  goalAchievementRate?: number;
+  dDay?: string;
+  daysToDday?: number;
   targetWeightKg?: number;
   latestWeightKg?: number;
+  weightDeltaKg?: number;
+  weightAchievementRate?: number;
   targetBodyFat?: number;
   latestBodyFatPct?: number;
+  bodyFatDeltaPct?: number;
+  bodyFatAchievementRate?: number;
 }
 
 export interface CalendarCellSummary {
@@ -169,6 +176,13 @@ export interface DashboardConsistencyMeta {
   source: "notion";
   refreshedAt: string;
   range: RangeKey;
+  windowStart: string;
+  windowEnd: string;
+  coveredDays: number;
+  mealCount: number;
+  workoutCount: number;
+  bodyMetricCount: number;
+  daysWithAnyLog: number;
 }
 
 const INTENSITY_MULTIPLIER: Record<WorkoutIntensity, number> = {
@@ -195,6 +209,24 @@ function normalizeWeights(policy: ScoringPolicy): ScoringPolicy {
 
 function toDateKey(date: string): string {
   return date.slice(0, 10);
+}
+
+function toDayMs(dateKey: string): number {
+  return Date.parse(`${dateKey}T00:00:00.000Z`);
+}
+
+function daysBetween(fromDateKey: string, toDateKey: string): number {
+  return Math.round((toDayMs(toDateKey) - toDayMs(fromDateKey)) / (24 * 60 * 60 * 1000));
+}
+
+function roundToOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function calculateTargetAchievementRate(latest: number, target: number): number {
+  const denominator = Math.max(Math.abs(target), 1);
+  const deviation = Math.abs(latest - target) / denominator;
+  return clamp((1 - deviation) * 100);
 }
 
 export function rangeToDays(range: RangeKey): number {
@@ -283,7 +315,8 @@ export function calculateGoalProgress(
   goal: Goal,
   workouts: WorkoutLog[],
   latestMetric?: BodyMetric,
-  rangeDays = 7
+  rangeDays = 7,
+  todayDateKey = new Date().toISOString().slice(0, 10)
 ): GoalProgress {
   const completedRoutineCount = workouts.length;
   const effectiveWeeks = Math.max(rangeDays / 7, 1);
@@ -298,19 +331,40 @@ export function calculateGoalProgress(
     averageWeeklyWorkouts,
     routineCompletionRate
   };
+  const achievementRates: number[] = [routineCompletionRate];
+
+  if (goal.dDay !== undefined) {
+    result.dDay = goal.dDay;
+    result.daysToDday = daysBetween(todayDateKey, goal.dDay);
+  }
 
   if (goal.targetWeightKg !== undefined) {
     result.targetWeightKg = goal.targetWeightKg;
   }
   if (latestMetric?.weightKg !== undefined) {
     result.latestWeightKg = latestMetric.weightKg;
+    if (goal.targetWeightKg !== undefined) {
+      const weightDeltaKg = roundToOneDecimal(latestMetric.weightKg - goal.targetWeightKg);
+      result.weightDeltaKg = weightDeltaKg;
+      result.weightAchievementRate = calculateTargetAchievementRate(latestMetric.weightKg, goal.targetWeightKg);
+      achievementRates.push(result.weightAchievementRate);
+    }
   }
   if (goal.targetBodyFat !== undefined) {
     result.targetBodyFat = goal.targetBodyFat;
   }
   if (latestMetric?.bodyFatPct !== undefined) {
     result.latestBodyFatPct = latestMetric.bodyFatPct;
+    if (goal.targetBodyFat !== undefined) {
+      const bodyFatDeltaPct = roundToOneDecimal(latestMetric.bodyFatPct - goal.targetBodyFat);
+      result.bodyFatDeltaPct = bodyFatDeltaPct;
+      result.bodyFatAchievementRate = calculateTargetAchievementRate(latestMetric.bodyFatPct, goal.targetBodyFat);
+      achievementRates.push(result.bodyFatAchievementRate);
+    }
   }
+  result.goalAchievementRate = clamp(
+    achievementRates.reduce((sum, item) => sum + item, 0) / achievementRates.length
+  );
 
   return result;
 }

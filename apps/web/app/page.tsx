@@ -191,6 +191,44 @@ function formatPercent(value: number): string {
   return `${Math.round(value)}%`;
 }
 
+function shortDateLabel(date: string): string {
+  return date.slice(5);
+}
+
+function formatDday(daysToDday?: number): string {
+  if (daysToDday === undefined) {
+    return "미설정";
+  }
+  if (daysToDday > 0) {
+    return `D-${daysToDday}`;
+  }
+  if (daysToDday === 0) {
+    return "D-Day";
+  }
+  return `D+${Math.abs(daysToDday)}`;
+}
+
+function formatSigned(value?: number, suffix = ""): string {
+  if (value === undefined) {
+    return "--";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value}${suffix}`;
+}
+
+function pickTrendPoints(daily: DashboardSummary["daily"], maxPoints = 18): DashboardSummary["daily"] {
+  if (daily.length <= maxPoints) {
+    return daily;
+  }
+  const step = Math.ceil(daily.length / maxPoints);
+  const sampled = daily.filter((_, index) => index % step === 0);
+  const last = daily[daily.length - 1];
+  if (last && sampled[sampled.length - 1]?.date !== last.date) {
+    sampled.push(last);
+  }
+  return sampled;
+}
+
 function toMealTimelineForm(log: MealLog): MealTimelineForm {
   return {
     date: log.date,
@@ -823,6 +861,14 @@ export default function HomePage() {
 
   const goalProgress = dashboard?.goals?.[0];
   const calendarCells = useMemo(() => buildCalendarUiCells(dashboard?.daily ?? []), [dashboard?.daily]);
+  const trendPoints = useMemo(() => pickTrendPoints(dashboard?.daily ?? []), [dashboard?.daily]);
+  const consistencyHint = useMemo(() => {
+    const meta = dashboard?.consistencyMeta;
+    if (!meta) {
+      return "집계 기준 정보가 없습니다.";
+    }
+    return `집계 ${meta.windowStart} ~ ${meta.windowEnd} (${meta.coveredDays}일), 식단 ${meta.mealCount} · 운동 ${meta.workoutCount} · 체성분 ${meta.bodyMetricCount}, 로그일 ${meta.daysWithAnyLog}일`;
+  }, [dashboard?.consistencyMeta]);
   const statusLabel = useMemo(() => {
     if (!goalProgress) {
       return "목표가 아직 없습니다.";
@@ -894,7 +940,82 @@ export default function HomePage() {
             <p>{goalProgress ? formatPercent(goalProgress.routineCompletionRate) : "--"}</p>
           </article>
         </div>
+        <div className="trend-panel">
+          <h3>일일 점수 추세</h3>
+          {trendPoints.length === 0 ? (
+            <p className="hint">기록이 쌓이면 기간별 점수 추세를 표시합니다.</p>
+          ) : (
+            <div className="trend-list">
+              {trendPoints.map((item) => (
+                <div key={`trend-${item.date}`} className="trend-row">
+                  <span className="trend-date">{shortDateLabel(item.date)}</span>
+                  <div className="trend-track" aria-hidden="true">
+                    <span className="trend-fill" style={{ width: `${item.overallScore}%` }} />
+                  </div>
+                  <span className="trend-score">{item.overallScore}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <p className="hint">{statusLabel}</p>
+        <p className="hint">{consistencyHint}</p>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>목표 비교 카드</h2>
+          <p className="hint">D-day / 루틴 / 체중 / 체지방 달성 상태</p>
+        </div>
+        {!goalProgress ? (
+          <p className="hint">목표를 저장하면 목표 대비 달성률 카드를 표시합니다.</p>
+        ) : (
+          <div className="goal-card-grid">
+            <article className="goal-progress-card">
+              <h3>D-day</h3>
+              <p className="goal-progress-value">{formatDday(goalProgress.daysToDday)}</p>
+              <p className="hint">{goalProgress.dDay ? `목표일 ${goalProgress.dDay}` : "목표일 미설정"}</p>
+            </article>
+            <article className="goal-progress-card">
+              <h3>통합 달성률</h3>
+              <p className="goal-progress-value">
+                {goalProgress.goalAchievementRate !== undefined ? formatPercent(goalProgress.goalAchievementRate) : "--"}
+              </p>
+              <p className="hint">루틴/체중/체지방 기준 평균</p>
+            </article>
+            <article className="goal-progress-card">
+              <h3>루틴 달성률</h3>
+              <p className="goal-progress-value">{formatPercent(goalProgress.routineCompletionRate)}</p>
+              <p className="hint">
+                {goalProgress.completedRoutineCount}회 완료 / 주 {goalProgress.weeklyRoutineTarget}회 목표
+              </p>
+            </article>
+            <article className="goal-progress-card">
+              <h3>체중 목표</h3>
+              <p className="goal-progress-value">
+                {goalProgress.weightAchievementRate !== undefined
+                  ? formatPercent(goalProgress.weightAchievementRate)
+                  : "--"}
+              </p>
+              <p className="hint">
+                현재 {goalProgress.latestWeightKg ?? "--"}kg / 목표 {goalProgress.targetWeightKg ?? "--"}kg (
+                {formatSigned(goalProgress.weightDeltaKg, "kg")})
+              </p>
+            </article>
+            <article className="goal-progress-card">
+              <h3>체지방 목표</h3>
+              <p className="goal-progress-value">
+                {goalProgress.bodyFatAchievementRate !== undefined
+                  ? formatPercent(goalProgress.bodyFatAchievementRate)
+                  : "--"}
+              </p>
+              <p className="hint">
+                현재 {goalProgress.latestBodyFatPct ?? "--"}% / 목표 {goalProgress.targetBodyFat ?? "--"}% (
+                {formatSigned(goalProgress.bodyFatDeltaPct, "%")})
+              </p>
+            </article>
+          </div>
+        )}
       </section>
 
       <section className="card">

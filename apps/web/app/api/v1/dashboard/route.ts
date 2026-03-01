@@ -30,12 +30,6 @@ export async function GET(request: Request) {
       goals: await repo.listGoalsByUser(session.userId)
     });
 
-    summary.consistencyMeta = {
-      source: "notion",
-      refreshedAt: new Date().toISOString(),
-      range: parsed.data.range
-    };
-
     return ok(summary, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load dashboard summary.";

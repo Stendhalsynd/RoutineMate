@@ -122,6 +122,57 @@ test("calculateGoalProgress normalizes completion by range length", () => {
   assert.equal(goalProgress.routineCompletionRate, 48);
 });
 
+test("calculateGoalProgress exposes d-day and goal deltas", () => {
+  const goal: Goal = {
+    id: "goal-dday",
+    userId: "user-1",
+    weeklyRoutineTarget: 4,
+    dDay: "2026-03-10",
+    targetWeightKg: 70,
+    targetBodyFat: 18,
+    createdAt: "2026-02-01T00:00:00.000Z"
+  };
+  const workouts: WorkoutLog[] = [];
+  const goalProgress = calculateGoalProgress(
+    goal,
+    workouts,
+    {
+      id: "m-1",
+      userId: "user-1",
+      date: "2026-03-01",
+      weightKg: 72,
+      bodyFatPct: 20,
+      createdAt: "2026-03-01T00:00:00.000Z"
+    },
+    7,
+    "2026-03-01"
+  );
+
+  assert.equal(goalProgress.dDay, "2026-03-10");
+  assert.equal(goalProgress.daysToDday, 9);
+  assert.equal(goalProgress.weightDeltaKg, 2);
+  assert.equal(goalProgress.bodyFatDeltaPct, 2);
+  assert.equal(goalProgress.weightAchievementRate, 97);
+  assert.equal(goalProgress.bodyFatAchievementRate, 89);
+});
+
+test("calculateGoalProgress computes D-Day zero and elapsed states", () => {
+  const goal: Goal = {
+    id: "goal-dday-edge",
+    userId: "user-1",
+    weeklyRoutineTarget: 3,
+    dDay: "2026-03-01",
+    createdAt: "2026-02-01T00:00:00.000Z"
+  };
+  const workouts: WorkoutLog[] = [];
+
+  const onDay = calculateGoalProgress(goal, workouts, undefined, 7, "2026-03-01");
+  assert.equal(onDay.daysToDday, 0);
+
+  const afterDay = calculateGoalProgress(goal, workouts, undefined, 7, "2026-03-05");
+  assert.equal(afterDay.daysToDday, -4);
+});
+
 test("toCalendarCellSummary maps status to color", () => {
   const progress = calculateDailyProgress("2026-02-27", [], []);
   const summary = toCalendarCellSummary(progress);

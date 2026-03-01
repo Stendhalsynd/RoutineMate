@@ -47,8 +47,10 @@ function latestMetric(metrics: BodyMetric[]): BodyMetric | undefined {
 
 export function aggregateDashboard(input: DashboardInput): DashboardSummary {
   const now = input.now ?? new Date();
-  const endMs = dayMs(now.toISOString().slice(0, 10));
+  const endDateKey = now.toISOString().slice(0, 10);
+  const endMs = dayMs(endDateKey);
   const startMs = endMs - (rangeToDays(input.range) - 1) * 24 * 60 * 60 * 1000;
+  const startDateKey = new Date(startMs).toISOString().slice(0, 10);
 
   const meals = input.meals.filter((item) => inWindow(item.date, startMs, endMs));
   const workouts = input.workouts.filter((item) => inWindow(item.date, startMs, endMs));
@@ -80,12 +82,22 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
   }
 
   const daily = buildDateKeys(startMs, endMs).map((key) => {
-    return calculateDailyProgress(key, mealsByDate.get(key) ?? [], workoutsByDate.get(key) ?? [], (metricsByDate.get(key) ?? []).length > 0);
+    return calculateDailyProgress(
+      key,
+      mealsByDate.get(key) ?? [],
+      workoutsByDate.get(key) ?? [],
+      (metricsByDate.get(key) ?? []).length > 0
+    );
   });
 
-  const latest = latestMetric(bodyMetrics);
+  const latest = latestMetric(input.bodyMetrics);
   const rangeDays = rangeToDays(input.range);
-  const goals = input.goals.map((goal) => calculateGoalProgress(goal, workouts, latest, rangeDays));
+  const goals = input.goals.map((goal) =>
+    calculateGoalProgress(goal, workouts, latest, rangeDays, endDateKey)
+  );
+  const daysWithAnyLog = daily.filter(
+    (item) => item.mealLogCount > 0 || item.workoutLogCount > 0 || item.hasBodyMetric
+  ).length;
 
   return {
     range: input.range,
@@ -95,6 +107,18 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
     latestWeightKg: latest?.weightKg ?? null,
     latestBodyFatPct: latest?.bodyFatPct ?? null,
     daily,
-    goals
+    goals,
+    consistencyMeta: {
+      source: "notion",
+      refreshedAt: now.toISOString(),
+      range: input.range,
+      windowStart: startDateKey,
+      windowEnd: endDateKey,
+      coveredDays: daily.length,
+      mealCount: meals.length,
+      workoutCount: workouts.length,
+      bodyMetricCount: bodyMetrics.length,
+      daysWithAnyLog
+    }
   };
 }
