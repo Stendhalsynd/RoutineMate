@@ -223,3 +223,32 @@ npm run notion:schema:check
 - `NOTION_DB_GOALS`
 - `NOTION_DB_MEAL_TEMPLATES`
 - `NOTION_DB_WORKOUT_TEMPLATES`
+
+## 8) 배포 후 Playwright 검증 루프
+
+S3-5 이후 권장 루프:
+1. Notion 스키마 점검
+2. Vercel 프로덕션 배포
+3. 배포 URL에서 Playwright E2E 검증
+
+한 번에 실행:
+```bash
+npm run deploy:prod:verify
+```
+
+개별 실행:
+```bash
+npm run notion:schema:check
+npx vercel --prod --yes --token "$VERCEL_TOKEN"
+PLAYWRIGHT_BASE_URL="https://routinemate-kohl.vercel.app" npm run verify:deploy:prod
+```
+
+Playwright 검증 시나리오 파일:
+- `tests/e2e/deploy-verification.spec.ts`
+
+검증 항목:
+- `/settings` 진입 및 게스트 세션 시작
+- 목표 저장 성공 메시지 확인
+- 식단/운동 템플릿 추가 성공 확인
+- `Notion integration is not configured...` 에러 미노출
+- `빠른 API 확인` 섹션 미노출
