@@ -4,16 +4,39 @@ function uniqueLabel(prefix: string): string {
   return `${prefix}-${Date.now().toString().slice(-6)}`;
 }
 
-test("production settings page supports goal/template actions and hides internal debug section", async ({ page }) => {
+test("production settings page supports goal/template actions and hides internal debug section", async ({
+  page,
+  request,
+  context,
+  baseURL
+}) => {
   const mealLabel = uniqueLabel("meal-tpl");
   const workoutLabel = uniqueLabel("workout-tpl");
+
+  const guestResponse = await request.post("/api/v1/auth/guest", { data: {} });
+  expect(guestResponse.ok()).toBeTruthy();
+  const guestPayload = (await guestResponse.json()) as {
+    data?: { sessionId?: string };
+  };
+  const sessionId = guestPayload.data?.sessionId;
+  expect(sessionId).toBeTruthy();
+
+  const host = new URL(baseURL ?? "https://routinemate-kohl.vercel.app").hostname;
+  await context.addCookies([
+    {
+      name: "routinemate_session_id",
+      value: sessionId!,
+      domain: host,
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax"
+    }
+  ]);
 
   await page.goto("/settings", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByText("빠른 API 확인")).toHaveCount(0);
-
-  const startGuestButton = page.getByRole("button", { name: "게스트 세션 시작" });
-  await startGuestButton.click();
 
   const sessionButton = page.getByRole("button", { name: "세션 확인" });
   await expect(sessionButton).toBeEnabled({ timeout: 20_000 });

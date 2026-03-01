@@ -332,7 +332,7 @@ p {
 }
 
 .settings-goal-card {
-  max-width: 760px;
+  width: 100%;
 }
 
 .settings-template-grid {
