@@ -258,6 +258,6 @@
 
 ### S4-4 릴리즈 파이프라인(웹+APK)
 - 웹: `deploy:prod:verify`
-- 모바일: `eas.json` 기반 `preview/release` APK 빌드
+- 모바일: 로컬 Gradle 기반 `preview/release` APK 빌드 (`scripts/build-apk.sh`)
 - 릴리즈: GitHub Release APK 첨부 스크립트 + Discord CHANGELOG
-- 테스트: env 누락 시 명확 오류, 성공 시 산출물 업로드
+- 테스트: Android SDK/JDK/토큰 누락 시 명확 오류, 성공 시 산출물 업로드
