@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BodyMetric,
   BodyPart,
@@ -511,57 +511,64 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     queryKey: queryKeys.dashboard(sessionId ?? "", range),
     queryFn: () => fetchDashboard(sessionId!, range),
     enabled: Boolean(sessionId) && view === "dashboard",
-    placeholderData: (previous) => previous
+    staleTime: 120_000,
+    placeholderData: keepPreviousData
   });
 
   const goalQuery = useQuery({
     queryKey: queryKeys.goal(sessionId ?? ""),
     queryFn: () => fetchGoal(sessionId!),
     enabled: Boolean(sessionId) && (view === "dashboard" || view === "settings"),
-    placeholderData: (previous) => previous
+    staleTime: 300_000,
+    placeholderData: keepPreviousData
   });
 
   const dayQuery = useQuery({
     queryKey: queryKeys.day(sessionId ?? "", selectedDate),
     queryFn: () => fetchDay(sessionId!, selectedDate),
     enabled: Boolean(sessionId) && view === "records",
-    placeholderData: (previous) => previous
+    staleTime: 120_000,
+    placeholderData: keepPreviousData
   });
 
   const mealTemplatesQuery = useQuery({
     queryKey: queryKeys.mealTemplates(sessionId ?? ""),
     queryFn: () => fetchMealTemplates(sessionId!),
     enabled: Boolean(sessionId) && (view === "records" || view === "settings"),
-    placeholderData: (previous) => previous
+    staleTime: 300_000,
+    placeholderData: keepPreviousData
   });
 
   const workoutTemplatesQuery = useQuery({
     queryKey: queryKeys.workoutTemplates(sessionId ?? ""),
     queryFn: () => fetchWorkoutTemplates(sessionId!),
     enabled: Boolean(sessionId) && (view === "records" || view === "settings"),
-    placeholderData: (previous) => previous
+    staleTime: 300_000,
+    placeholderData: keepPreviousData
   });
 
   const reminderSettingsQuery = useQuery({
     queryKey: queryKeys.reminderSettings(sessionId ?? ""),
     queryFn: () => fetchReminderSettings(sessionId!),
     enabled: Boolean(sessionId) && (view === "settings" || view === "records"),
-    placeholderData: (previous) => previous
+    staleTime: 300_000,
+    placeholderData: keepPreviousData
   });
 
   const reminderEvaluationQuery = useQuery({
     queryKey: queryKeys.reminderEval(sessionId ?? "", selectedDate),
     queryFn: () => fetchReminderEvaluation(sessionId!, selectedDate),
     enabled: Boolean(sessionId) && view === "records",
-    placeholderData: (previous) => previous
+    staleTime: 30_000,
+    placeholderData: keepPreviousData
   });
 
   const bootstrapQuery = useQuery({
     queryKey: queryKeys.bootstrap(sessionId ?? "", view, selectedDate, range),
     queryFn: () => fetchBootstrap(sessionId!, view, selectedDate, range),
     enabled: Boolean(sessionId),
-    staleTime: 30_000,
-    placeholderData: (previous) => previous
+    staleTime: 120_000,
+    placeholderData: keepPreviousData
   });
 
   useEffect(() => {
@@ -646,15 +653,21 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const workoutTemplates = (workoutTemplatesQuery.data ?? []) as WorkoutTemplate[];
   const reminderSettings = (reminderSettingsQuery.data ?? null) as ReminderSettings | null;
   const reminderEvaluation = (reminderEvaluationQuery.data ?? null) as ReminderEvaluation | null;
-  const isSyncing =
-    sessionQuery.isFetching ||
-    bootstrapQuery.isFetching ||
-    dashboardQuery.isFetching ||
-    dayQuery.isFetching ||
-    goalQuery.isFetching ||
-    mealTemplatesQuery.isFetching ||
-    workoutTemplatesQuery.isFetching ||
-    reminderSettingsQuery.isFetching;
+  const isSyncing = (() => {
+    if (view === "dashboard") {
+      return sessionQuery.isFetching || dashboardQuery.isFetching || bootstrapQuery.isFetching || goalQuery.isFetching;
+    }
+    if (view === "records") {
+      return sessionQuery.isFetching || dayQuery.isFetching || reminderEvaluationQuery.isFetching;
+    }
+    return (
+      sessionQuery.isFetching ||
+      goalQuery.isFetching ||
+      mealTemplatesQuery.isFetching ||
+      workoutTemplatesQuery.isFetching ||
+      reminderSettingsQuery.isFetching
+    );
+  })();
 
   const goalSyncRef = useRef<string>("");
   useEffect(() => {
@@ -968,7 +981,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       });
     }
 
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1002,7 +1015,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1083,7 +1096,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
     setWorkoutForm((prev) => ({ ...prev, exerciseName: "" }));
     setRecordsMessage({ type: "success", text: "운동을 저장했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1112,7 +1125,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1173,7 +1186,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "success", text: "체성분 기록을 저장했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1202,7 +1215,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "info", text: "체성분 기록을 삭제했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
   }
 
@@ -1255,7 +1268,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     const payload = (await response.json()) as { data?: Goal };
     queryClient.setQueryData(goalKey, payload.data ?? null);
     setSettingsMessage({ type: "success", text: "목표를 저장했습니다." });
-    void queryClient.invalidateQueries({ queryKey: ["dashboard", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
   }
 
   async function createMealTemplateAction(): Promise<void> {

@@ -7,6 +7,32 @@ MOBILE_DIR="${ROOT_DIR}/apps/mobile"
 ANDROID_DIR="${MOBILE_DIR}/android"
 APK_DIST_DIR="${ROOT_DIR}/dist/apk"
 
+load_dotenv() {
+  local env_file="${ROOT_DIR}/.env"
+  if [[ ! -f "${env_file}" ]]; then
+    return
+  fi
+
+  set -a
+  # shellcheck disable=SC1091
+  source "${env_file}"
+  set +a
+
+  if [[ -z "${EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID:-}" && -n "${GOOGLE_ANDROID_CLIENT_ID:-}" ]]; then
+    export EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID="${GOOGLE_ANDROID_CLIENT_ID}"
+  fi
+
+  if [[ -z "${EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID:-}" && -n "${GOOGLE_WEB_CLIENT_ID:-}" ]]; then
+    export EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID="${GOOGLE_WEB_CLIENT_ID}"
+  fi
+}
+
+load_dotenv
+
+if [[ -z "${EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID:-}" ]]; then
+  echo "[WARN] EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID is not set. Android google login will be unavailable."
+fi
+
 if ! command -v npx >/dev/null 2>&1; then
   echo "[FAIL] npx is not installed."
   exit 1

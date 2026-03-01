@@ -7,8 +7,13 @@
     "platforms": [
       "android"
     ],
+    "icon": "./assets/icon.png",
     "android": {
-      "package": "com.routinemate.app"
+      "package": "com.routinemate.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1F7A65"
+      }
     },
     "plugins": [
       "expo-asset"

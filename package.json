@@ -16,6 +16,7 @@
     "build:apk:release": "bash scripts/build-apk.sh release",
     "release:apk:github": "bash scripts/release-apk.sh",
     "notion:schema:check": "node scripts/check-notion-schema.mjs",
+    "release:notes": "node scripts/generate-release-notes.mjs",
     "verify:deploy:prod": "npx playwright test --config=playwright.deploy.config.ts",
     "deploy:prod:verify": "bash scripts/deploy-and-verify.sh"
   },

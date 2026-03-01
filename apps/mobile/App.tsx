@@ -8,6 +8,8 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  Platform,
+  StatusBar as RNStatusBar,
   View,
   type KeyboardTypeOptions
 } from "react-native";
@@ -48,6 +50,16 @@ type ReminderSettings = {
   channels: string[];
   timezone: string;
 };
+
+type ReminderEvaluation = {
+  date: string;
+  mealCount: number;
+  workoutCount: number;
+  isMissingLogCandidate: boolean;
+};
+
+const DEFAULT_REMINDER_TIMEZONE = "Asia/Seoul";
+const DEFAULT_REMINDER_CHANNELS: Array<ReminderSettings["channels"][number]> = ["web_in_app", "mobile_local"];
 
 type MealSlot = "breakfast" | "lunch" | "dinner" | "dinner2";
 
@@ -301,12 +313,31 @@ export default function App(): React.JSX.Element {
 
   const [mealTemplateLabel, setMealTemplateLabel] = React.useState("");
   const [mealTemplateSlot, setMealTemplateSlot] = React.useState<MealSlot>("lunch");
+  const [editingMealTemplateId, setEditingMealTemplateId] = React.useState<string | null>(null);
+  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = React.useState<{ label: string; mealSlot: MealSlot }>({
+    label: "",
+    mealSlot: "lunch"
+  });
 
   const [workoutTemplateLabel, setWorkoutTemplateLabel] = React.useState("");
   const [workoutTemplateBodyPart, setWorkoutTemplateBodyPart] = React.useState<BodyPart>("full_body");
   const [workoutTemplatePurpose, setWorkoutTemplatePurpose] = React.useState<WorkoutPurpose>("fat_loss");
   const [workoutTemplateTool, setWorkoutTemplateTool] = React.useState<WorkoutTool>("bodyweight");
   const [workoutTemplateDuration, setWorkoutTemplateDuration] = React.useState("30");
+  const [editingWorkoutTemplateId, setEditingWorkoutTemplateId] = React.useState<string | null>(null);
+  const [editingWorkoutTemplateDraft, setEditingWorkoutTemplateDraft] = React.useState<{
+    label: string;
+    bodyPart: BodyPart;
+    purpose: WorkoutPurpose;
+    tool: WorkoutTool;
+    defaultDuration: string;
+  }>({
+    label: "",
+    bodyPart: "full_body",
+    purpose: "fat_loss",
+    tool: "bodyweight",
+    defaultDuration: "30"
+  });
 
   const [workoutForm, setWorkoutForm] = React.useState<WorkoutLogInput>({
     date: today,
@@ -327,13 +358,16 @@ export default function App(): React.JSX.Element {
   const [goalWeight, setGoalWeight] = React.useState("");
   const [goalFat, setGoalFat] = React.useState("");
   const [goalDday, setGoalDday] = React.useState("");
+  const [isGoalDraftDirty, setGoalDraftDirty] = React.useState(false);
+  const [isSyncing, setIsSyncing] = React.useState(false);
+  const [reminderEvaluation, setReminderEvaluation] = React.useState<ReminderEvaluation | null>(null);
 
   const [reminder, setReminder] = React.useState<ReminderSettings>({
     isEnabled: true,
     dailyReminderTime: "20:00",
     missingLogReminderTime: "21:30",
-    channels: ["web_in_app", "mobile_local"],
-    timezone: "Asia/Seoul"
+    channels: DEFAULT_REMINDER_CHANNELS,
+    timezone: DEFAULT_REMINDER_TIMEZONE
   });
 
   const checkinBySlot = React.useMemo(() => {
@@ -351,6 +385,12 @@ export default function App(): React.JSX.Element {
 
   const activeMealTemplates = React.useMemo(() => mealTemplates.filter((item) => item.isActive), [mealTemplates]);
   const activeWorkoutTemplates = React.useMemo(() => workoutTemplates.filter((item) => item.isActive), [workoutTemplates]);
+  const statusBarOffset = React.useMemo(() => {
+    if (Platform.OS === "android") {
+      return RNStatusBar.currentHeight ?? 0;
+    }
+    return 20;
+  }, []);
 
   const messageTextStyle = React.useMemo(() => {
     if (!message) {
@@ -365,42 +405,127 @@ export default function App(): React.JSX.Element {
     return styles.messageSuccess;
   }, [message]);
 
-  const loadSessionData = React.useCallback(async () => {
+  const sessionInfoText = React.useMemo(() => {
+    if (!session) {
+      return "세션 없음";
+    }
+    return `세션: ${session.sessionId.slice(0, 10)}...`;
+  }, [session]);
+
+  const confirmSession = React.useCallback(() => {
+    if (!session) {
+      setMessage({ type: "info", text: "세션이 없습니다. 설정에서 게스트 세션을 시작해 주세요." });
+      return;
+    }
+    setMessage({ type: "info", text: `세션 ID: ${session.sessionId}` });
+  }, [session]);
+
+  const refreshCoreSessionData = React.useCallback(async () => {
     if (!session) {
       return;
     }
 
     try {
-      const [dashboardData, goalData, dayData, mealTemplatesData, workoutTemplatesData] = await Promise.all([
+      setIsSyncing(true);
+      const [dashboardData, goalData, reminderSettingsData] = await Promise.all([
         apiFetch<Dashboard>(`/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}`),
         apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(session.sessionId)}`),
-        apiFetch<DaySnapshot>(`/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(selectedDate)}`),
-        apiFetch<{ templates: MealTemplate[] }>(`/api/v1/templates/meals?sessionId=${encodeURIComponent(session.sessionId)}`),
-        apiFetch<{ templates: WorkoutTemplate[] }>(`/api/v1/templates/workouts?sessionId=${encodeURIComponent(session.sessionId)}`)
+        apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`).then(
+          (payload: { settings: ReminderSettings | null }) => payload
+        )
       ]);
 
       setDashboard(dashboardData ?? null);
       setGoal(goalData?.goal ?? null);
-      setDay(dayData ?? defaultDay(selectedDate));
-      setMealTemplates(mealTemplatesData.templates ?? []);
-      setWorkoutTemplates(workoutTemplatesData.templates ?? []);
+      if (reminderSettingsData?.settings) {
+        setReminder(reminderSettingsData.settings);
+      }
 
-      setGoalTarget(String(goalData?.goal?.weeklyRoutineTarget ?? 4));
-      setGoalWeight(goalData?.goal?.targetWeightKg?.toString() ?? "");
-      setGoalFat(goalData?.goal?.targetBodyFat?.toString() ?? "");
-      setGoalDday(goalData?.goal?.dDay ?? "");
-
-      setMealTemplateLabel("");
-      setWorkoutTemplateLabel("");
-      setMessage({ type: "info", text: "데이터를 불러왔습니다." });
+      if (!isGoalDraftDirty) {
+        setGoalTarget(String(goalData?.goal?.weeklyRoutineTarget ?? 4));
+        setGoalWeight(goalData?.goal?.targetWeightKg?.toString() ?? "");
+        setGoalFat(goalData?.goal?.targetBodyFat?.toString() ?? "");
+        setGoalDday(goalData?.goal?.dDay ?? "");
+      }
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "조회에 실패했습니다." });
+    } finally {
+      setIsSyncing(false);
     }
-  }, [range, session, selectedDate]);
+  }, [isGoalDraftDirty, range, session]);
+
+  const loadTemplateCatalog = React.useCallback(async () => {
+    if (!session) {
+      return;
+    }
+
+    try {
+      const [mealTemplatesData, workoutTemplatesData] = await Promise.all([
+        apiFetch<{ templates: MealTemplate[] }>(`/api/v1/templates/meals?sessionId=${encodeURIComponent(session.sessionId)}`),
+        apiFetch<{ templates: WorkoutTemplate[] }>(`/api/v1/templates/workouts?sessionId=${encodeURIComponent(session.sessionId)}`)
+      ]);
+      setMealTemplates(mealTemplatesData.templates ?? []);
+      setWorkoutTemplates(workoutTemplatesData.templates ?? []);
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "템플릿 조회에 실패했습니다." });
+    }
+  }, [session]);
+
+  const loadDayData = React.useCallback(
+    async (date: string) => {
+      if (!session) {
+        return;
+      }
+
+      try {
+        setIsSyncing(true);
+        const [dayData, reminderEvaluationData] = await Promise.all([
+          apiFetch<DaySnapshot>(`/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`),
+          apiFetch<ReminderEvaluation>(
+            `/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`
+          )
+        ]);
+
+        setDay(dayData ?? defaultDay(date));
+        setReminderEvaluation(reminderEvaluationData ?? { date, mealCount: 0, workoutCount: 0, isMissingLogCandidate: false });
+      } catch (error) {
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "날짜 기록을 불러오지 못했습니다." });
+      } finally {
+        setIsSyncing(false);
+      }
+    },
+    [session]
+  );
+
+  const refreshWorkspaceAfterMutation = React.useCallback(
+    async () => {
+      if (!session) {
+        return;
+      }
+      void refreshCoreSessionData();
+    },
+    [refreshCoreSessionData, session]
+  );
 
   React.useEffect(() => {
-    void loadSessionData();
-  }, [loadSessionData]);
+    if (!session) {
+      return;
+    }
+    void refreshCoreSessionData();
+    void loadTemplateCatalog();
+  }, [loadTemplateCatalog, refreshCoreSessionData, session]);
+
+  React.useEffect(() => {
+    if (tab !== "records") {
+      return;
+    }
+    void loadDayData(selectedDate);
+  }, [loadDayData, selectedDate, tab]);
+
+  React.useEffect(() => {
+    setWorkoutForm((prev) => ({ ...prev, date: selectedDate }));
+    setBodyMetricDate(selectedDate);
+  }, [selectedDate]);
 
   const startGuest = React.useCallback(async () => {
     try {
@@ -413,11 +538,14 @@ export default function App(): React.JSX.Element {
       setSelectedDate(today);
       setWorkoutForm((prev) => ({ ...prev, date: today }));
       setBodyMetricDate(today);
-      await loadSessionData();
+      setGoalDraftDirty(false);
+      void refreshCoreSessionData();
+      void loadTemplateCatalog();
+      void loadDayData(today);
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "게스트 시작 실패" });
     }
-  }, [loadSessionData, today]);
+  }, [loadDayData, refreshCoreSessionData, loadTemplateCatalog, today]);
 
   const upsertMealCheckin = React.useCallback(
     async (slot: MealSlot, completed: boolean, templateId?: string) => {
@@ -473,9 +601,41 @@ export default function App(): React.JSX.Element {
         setDay(previousDay);
         setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 저장 실패" });
       }
-      await loadSessionData();
+      void refreshWorkspaceAfterMutation();
     },
-    [checkinBySlot, day, loadSessionData, selectedDate, session]
+    [checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, session]
+  );
+
+  const deleteMealCheckin = React.useCallback(
+    async (slot: MealSlot) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        return;
+      }
+      const existing = checkinBySlot.get(slot);
+      if (!existing) {
+        return;
+      }
+
+      const previousDay = day;
+      setDay((current) => ({
+        ...current,
+        mealCheckins: current.mealCheckins.filter((item) => item.id !== existing.id)
+      }));
+
+      try {
+        await apiFetch<unknown>(`/api/v1/meal-checkins/${existing.id}`, {
+          method: "DELETE",
+          body: JSON.stringify({ sessionId: session.sessionId })
+        });
+        setMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
+      } catch (error) {
+        setDay(previousDay);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 삭제 실패" });
+      }
+      void refreshWorkspaceAfterMutation();
+    },
+    [checkinBySlot, day, refreshWorkspaceAfterMutation, session, selectedDate]
   );
 
   const saveWorkoutLog = React.useCallback(
@@ -534,9 +694,33 @@ export default function App(): React.JSX.Element {
         setDay(previousDay);
         setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 저장 실패" });
       }
-      await loadSessionData();
+      void refreshWorkspaceAfterMutation();
     },
-    [day, loadSessionData, selectedDate, session, workoutForm]
+    [day, refreshWorkspaceAfterMutation, selectedDate, session, workoutForm]
+  );
+
+  const deleteWorkoutLog = React.useCallback(
+    async (logId: string) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        return;
+      }
+
+      const previousDay = day;
+      setDay((current) => ({ ...current, workoutLogs: current.workoutLogs.filter((item) => item.id !== logId) }));
+      try {
+        await apiFetch<unknown>(`/api/v1/workout-logs/${logId}`, {
+          method: "DELETE",
+          body: JSON.stringify({ sessionId: session.sessionId })
+        });
+        setMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
+      } catch (error) {
+        setDay(previousDay);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 삭제 실패" });
+      }
+      void refreshWorkspaceAfterMutation();
+    },
+    [day, refreshWorkspaceAfterMutation, session, selectedDate]
   );
 
   const saveBodyMetric = React.useCallback(async () => {
@@ -581,8 +765,36 @@ export default function App(): React.JSX.Element {
       setDay(previousDay);
       setMessage({ type: "error", text: error instanceof Error ? error.message : "체성분 저장 실패" });
     }
-    await loadSessionData();
-  }, [bodyFatForm, bodyMetricDate, day, loadSessionData, session, weightForm]);
+    void refreshWorkspaceAfterMutation();
+  }, [bodyFatForm, bodyMetricDate, day, refreshWorkspaceAfterMutation, session, weightForm]);
+
+  const deleteBodyMetric = React.useCallback(
+    async (metricId: string) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        return;
+      }
+
+      const previousDay = day;
+      setDay((current) => ({
+        ...current,
+        bodyMetrics: current.bodyMetrics.filter((item) => item.id !== metricId)
+      }));
+
+      try {
+        await apiFetch<unknown>(`/api/v1/body-metrics/${metricId}`, {
+          method: "DELETE",
+          body: JSON.stringify({ sessionId: session.sessionId })
+        });
+        setMessage({ type: "info", text: "체성분 기록을 삭제했습니다." });
+      } catch (error) {
+        setDay(previousDay);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "체성분 삭제 실패" });
+      }
+      void refreshWorkspaceAfterMutation();
+    },
+    [day, refreshWorkspaceAfterMutation, session, bodyMetricDate]
+  );
 
   const saveGoal = React.useCallback(async () => {
     if (!session) {
@@ -610,12 +822,13 @@ export default function App(): React.JSX.Element {
         body: JSON.stringify(payload)
       });
       setGoal(next);
+      setGoalDraftDirty(false);
       setMessage({ type: "success", text: "목표를 저장했습니다." });
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "목표 저장 실패" });
     }
-    await loadSessionData();
-  }, [goalDday, goalFat, goalTarget, goalWeight, loadSessionData, session]);
+    void refreshWorkspaceAfterMutation();
+  }, [goalDday, goalFat, goalTarget, goalWeight, refreshWorkspaceAfterMutation, session]);
 
   const createMealTemplate = React.useCallback(async () => {
     if (!session) {
@@ -658,6 +871,65 @@ export default function App(): React.JSX.Element {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 템플릿 저장 실패" });
     }
   }, [mealTemplateLabel, mealTemplateSlot, mealTemplates, session]);
+
+  const updateMealTemplate = React.useCallback(
+    async (id: string, updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        return;
+      }
+      const previous = mealTemplates;
+      if (!mealTemplates.find((item) => item.id === id)) {
+        setMessage({ type: "error", text: "수정할 템플릿을 찾지 못했습니다." });
+        return;
+      }
+      setMealTemplates((current) => current.map((item) => (item.id === id ? { ...item, ...updates } : item)));
+      try {
+        const saved = await apiFetch<MealTemplate>(`/api/v1/templates/meals/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            sessionId: session.sessionId,
+            ...(updates.label !== undefined ? { label: updates.label } : {}),
+            ...(updates.mealSlot !== undefined ? { mealSlot: updates.mealSlot } : {}),
+            ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
+          })
+        });
+        if (saved?.id) {
+          setMealTemplates((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+        }
+        setMessage({ type: "success", text: "식단 템플릿을 수정했습니다." });
+      } catch (error) {
+        setMealTemplates(previous);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 템플릿 수정 실패" });
+      }
+    },
+    [mealTemplates, session]
+  );
+
+  const saveMealTemplateEdit = React.useCallback(async () => {
+    if (!editingMealTemplateId) {
+      return;
+    }
+    const trimmed = editingMealTemplateDraft.label.trim();
+    if (!trimmed.length) {
+      setMessage({ type: "error", text: "식단 템플릿 이름을 입력해 주세요." });
+      return;
+    }
+    await updateMealTemplate(editingMealTemplateId, {
+      label: trimmed,
+      mealSlot: editingMealTemplateDraft.mealSlot
+    });
+    setEditingMealTemplateId(null);
+  }, [editingMealTemplateDraft.label, editingMealTemplateDraft.mealSlot, editingMealTemplateId, updateMealTemplate]);
+
+  const deactivateMealTemplate = React.useCallback(async (id: string) => {
+    await updateMealTemplate(id, { isActive: false });
+  }, [updateMealTemplate]);
+
+  const startMealTemplateEdit = React.useCallback((template: MealTemplate) => {
+    setEditingMealTemplateId(template.id);
+    setEditingMealTemplateDraft({ label: template.label, mealSlot: template.mealSlot });
+  }, []);
 
   const createWorkoutTemplate = React.useCallback(async () => {
     if (!session) {
@@ -708,9 +980,114 @@ export default function App(): React.JSX.Element {
     }
   }, [workoutTemplateBodyPart, workoutTemplateDuration, workoutTemplateLabel, workoutTemplatePurpose, workoutTemplateTool, session, workoutTemplates]);
 
+  const updateWorkoutTemplate = React.useCallback(
+    async (
+      id: string,
+      updates: Partial<
+        Pick<WorkoutTemplate, "label" | "bodyPart" | "purpose" | "tool" | "defaultDuration" | "isActive">
+      >
+    ) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        return;
+      }
+
+      const previous = workoutTemplates;
+      if (!workoutTemplates.find((item) => item.id === id)) {
+        setMessage({ type: "error", text: "수정할 템플릿을 찾지 못했습니다." });
+        return;
+      }
+
+      setWorkoutTemplates((current) => current.map((item) => (item.id === id ? { ...item, ...updates } : item)));
+      try {
+        const saved = await apiFetch<WorkoutTemplate>(`/api/v1/templates/workouts/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            sessionId: session.sessionId,
+            ...(updates.label !== undefined ? { label: updates.label } : {}),
+            ...(updates.bodyPart !== undefined ? { bodyPart: updates.bodyPart } : {}),
+            ...(updates.purpose !== undefined ? { purpose: updates.purpose } : {}),
+            ...(updates.tool !== undefined ? { tool: updates.tool } : {}),
+            ...(updates.defaultDuration !== undefined ? { defaultDuration: updates.defaultDuration } : {}),
+            ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
+          })
+        });
+        if (saved?.id) {
+          setWorkoutTemplates((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+        }
+        setMessage({ type: "success", text: "운동 템플릿을 수정했습니다." });
+      } catch (error) {
+        setWorkoutTemplates(previous);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 템플릿 수정 실패" });
+      }
+    },
+    [session, workoutTemplates]
+  );
+
+  const saveWorkoutTemplateEdit = React.useCallback(async () => {
+    if (!editingWorkoutTemplateId) {
+      return;
+    }
+    const trimmed = editingWorkoutTemplateDraft.label.trim();
+    if (!trimmed.length) {
+      setMessage({ type: "error", text: "운동 템플릿 이름을 입력해 주세요." });
+      return;
+    }
+
+    const defaultDuration = parseNumber(editingWorkoutTemplateDraft.defaultDuration);
+    await updateWorkoutTemplate(editingWorkoutTemplateId, {
+      label: trimmed,
+      bodyPart: editingWorkoutTemplateDraft.bodyPart,
+      purpose: editingWorkoutTemplateDraft.purpose,
+      tool: editingWorkoutTemplateDraft.tool,
+      ...(defaultDuration !== undefined ? { defaultDuration: Math.trunc(defaultDuration) } : {})
+    });
+    setEditingWorkoutTemplateId(null);
+  }, [
+    editingWorkoutTemplateDraft.bodyPart,
+    editingWorkoutTemplateDraft.defaultDuration,
+    editingWorkoutTemplateDraft.label,
+    editingWorkoutTemplateDraft.purpose,
+    editingWorkoutTemplateDraft.tool,
+    editingWorkoutTemplateId,
+    updateWorkoutTemplate
+  ]);
+
+  const deactivateWorkoutTemplate = React.useCallback(async (id: string) => {
+    await updateWorkoutTemplate(id, { isActive: false });
+  }, [updateWorkoutTemplate]);
+
+  const startWorkoutTemplateEdit = React.useCallback((template: WorkoutTemplate) => {
+    setEditingWorkoutTemplateId(template.id);
+    setEditingWorkoutTemplateDraft({
+      label: template.label,
+      bodyPart: template.bodyPart,
+      purpose: template.purpose,
+      tool: template.tool,
+      defaultDuration: String(template.defaultDuration ?? 30)
+    });
+  }, []);
+
+  const toggleReminderChannel = React.useCallback((channel: string) => {
+    setReminder((current) => {
+      const nextChannels = current.channels.includes(channel)
+        ? current.channels.filter((item) => item !== channel)
+        : [...current.channels, channel];
+      return {
+        ...current,
+        channels: nextChannels
+      };
+    });
+  }, []);
+
   const saveReminder = React.useCallback(async () => {
     if (!session) {
       setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      return;
+    }
+
+    if (reminder.channels.length === 0) {
+      setMessage({ type: "error", text: "최소 하나 이상의 알림 채널을 선택해 주세요." });
       return;
     }
 
@@ -777,20 +1154,40 @@ export default function App(): React.JSX.Element {
       });
       setSession(payload);
       setMessage({ type: "success", text: "Google 계정 전환이 완료되었습니다." });
-      await loadSessionData();
+      void refreshCoreSessionData();
+      void loadTemplateCatalog();
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "Google 전환 실패" });
     }
-  }, [loadSessionData, session]);
+  }, [loadTemplateCatalog, refreshCoreSessionData, session]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { paddingTop: statusBarOffset }]}>
       <StatusBar style="dark" />
       <View style={styles.topBar}>
-        <Text style={styles.brand}>RoutineMate</Text>
-        <Pressable style={styles.primaryButton} onPress={startGuest}>
-          <Text style={styles.primaryButtonText}>게스트 시작</Text>
-        </Pressable>
+        <View>
+          <Text style={styles.brand}>RoutineMate</Text>
+          <Text style={styles.topBarSub}>{sessionInfoText}</Text>
+        </View>
+        {tab === "settings" ? (
+          <View style={styles.topActions}>
+            <Pressable style={styles.primaryButton} onPress={startGuest}>
+              <Text style={styles.primaryButtonText}>게스트 시작</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryButton} onPress={confirmSession}>
+              <Text style={styles.secondaryButtonText}>세션 확인</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.topActions}>
+            <View style={styles.sessionBadge}>
+              <Text style={styles.sessionBadgeText}>{session ? "세션 연결됨" : "세션 미연결"}</Text>
+            </View>
+            <View style={styles.sessionBadge}>
+              <Text style={styles.sessionBadgeText}>{isSyncing ? "동기화 중..." : "동기화 완료"}</Text>
+            </View>
+          </View>
+        )}
       </View>
 
       <View style={styles.tabRow}>
@@ -811,7 +1208,7 @@ export default function App(): React.JSX.Element {
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={messageTextStyle}>{message?.text ?? ""}</Text>
-        <Text style={styles.hint}>세션: {session ? `${session.sessionId.slice(0, 10)}...` : "없음"}</Text>
+        <Text style={styles.hint}>상태: {session ? "세션 연결됨" : "세션 없음"}</Text>
 
         {tab === "dashboard" ? (
           <View style={styles.card}>
@@ -837,6 +1234,17 @@ export default function App(): React.JSX.Element {
         {tab === "records" ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>기록</Text>
+            <FieldInput
+              label="기록 날짜"
+              value={selectedDate}
+              onChangeText={(value) => setSelectedDate(value)}
+              placeholder="YYYY-MM-DD"
+            />
+            {session && reminder.isEnabled && reminderEvaluation?.isMissingLogCandidate ? (
+              <Text style={styles.messageInfo}>
+                미기록 상태입니다. 오늘 기록을 1건이라도 추가하면 경고가 해제됩니다.
+              </Text>
+            ) : null}
             <Text style={styles.hint}>식단 체크인</Text>
 
             {mealSlots.map((slot) => {
@@ -863,6 +1271,11 @@ export default function App(): React.JSX.Element {
                     >
                       <Text style={styles.chipText}>안함</Text>
                     </Pressable>
+                    {current ? (
+                      <Pressable style={styles.chip} onPress={() => void deleteMealCheckin(slot.value)}>
+                        <Text style={styles.chipText}>삭제</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                   <View style={styles.chipRowWrap}>
                     {templates.length > 0 ? (
@@ -975,6 +1388,52 @@ export default function App(): React.JSX.Element {
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveBodyMetric}>
               <Text style={styles.primaryButtonText}>체성분 저장</Text>
             </Pressable>
+
+            <Text style={[styles.sectionTitle, styles.actionGap]}>운동 기록 목록</Text>
+            <View style={styles.recordList}>
+              {day.workoutLogs.filter((item) => !item.isDeleted).length === 0 ? (
+                <Text style={styles.hint}>기록된 운동이 없습니다.</Text>
+              ) : (
+                day.workoutLogs
+                  .filter((item) => !item.isDeleted)
+                  .map((item) => (
+                    <View key={item.id} style={styles.recordListItem}>
+                      <View style={styles.recordListTextBlock}>
+                        <Text style={styles.recordListTitle}>{item.exerciseName}</Text>
+                        <Text style={styles.hint}>
+                          {item.bodyPart} / {item.purpose} / {item.tool} / {item.durationMinutes ?? 30}분 / {item.intensity}
+                        </Text>
+                      </View>
+                      <Pressable style={styles.secondaryButton} onPress={() => void deleteWorkoutLog(item.id)}>
+                        <Text style={styles.secondaryButtonText}>삭제</Text>
+                      </Pressable>
+                    </View>
+                  ))
+              )}
+            </View>
+
+            <Text style={[styles.sectionTitle, styles.actionGap]}>체성분 목록</Text>
+            <View style={styles.recordList}>
+              {day.bodyMetrics.filter((item) => !item.isDeleted).length === 0 ? (
+                <Text style={styles.hint}>기록된 체성분이 없습니다.</Text>
+              ) : (
+                day.bodyMetrics
+                  .filter((item) => !item.isDeleted)
+                  .map((item) => (
+                    <View key={item.id} style={styles.recordListItem}>
+                      <View style={styles.recordListTextBlock}>
+                        <Text style={styles.recordListTitle}>{formatDateLabel(item.date)}</Text>
+                        <Text style={styles.hint}>
+                          체중 {item.weightKg ?? "--"}kg / 체지방 {item.bodyFatPct ?? "--"}%
+                        </Text>
+                      </View>
+                      <Pressable style={styles.secondaryButton} onPress={() => void deleteBodyMetric(item.id)}>
+                        <Text style={styles.secondaryButtonText}>삭제</Text>
+                      </Pressable>
+                    </View>
+                  ))
+              )}
+            </View>
           </View>
         ) : null}
 
@@ -986,28 +1445,40 @@ export default function App(): React.JSX.Element {
             <FieldInput
               label="주간 목표"
               value={goalTarget}
-              onChangeText={setGoalTarget}
+              onChangeText={(value) => {
+                setGoalDraftDirty(true);
+                setGoalTarget(value);
+              }}
               placeholder="예: 4"
               keyboardType="numeric"
             />
             <FieldInput
               label="목표 체중"
               value={goalWeight}
-              onChangeText={setGoalWeight}
+              onChangeText={(value) => {
+                setGoalDraftDirty(true);
+                setGoalWeight(value);
+              }}
               placeholder="목표 체중(kg)"
               keyboardType="numeric"
             />
             <FieldInput
               label="목표 체지방"
               value={goalFat}
-              onChangeText={setGoalFat}
+              onChangeText={(value) => {
+                setGoalDraftDirty(true);
+                setGoalFat(value);
+              }}
               placeholder="목표 체지방(%)"
               keyboardType="numeric"
             />
             <FieldInput
               label="D-Day"
               value={goalDday}
-              onChangeText={setGoalDday}
+              onChangeText={(value) => {
+                setGoalDraftDirty(true);
+                setGoalDday(value);
+              }}
               placeholder="YYYY-MM-DD"
             />
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveGoal}>
@@ -1032,14 +1503,68 @@ export default function App(): React.JSX.Element {
             </Pressable>
 
             <Text style={styles.hint}>등록된 식단 템플릿</Text>
-            <View style={styles.chipRowWrap}>
+            <View style={styles.templateList}>
               {mealTemplates.length === 0 ? <Text style={styles.hint}>등록된 템플릿이 없습니다.</Text> : null}
               {mealTemplates.map((template) => (
-                <View key={template.id} style={styles.pillRow}>
-                  <Text style={styles.pillLabel}>
-                    {template.label} ({mealSlots.find((slot) => slot.value === template.mealSlot)?.label})
-                  </Text>
-                  <Text style={styles.hint}>{template.isActive ? "ON" : "OFF"}</Text>
+                <View key={template.id} style={styles.recordItem}>
+                  {editingMealTemplateId === template.id ? (
+                    <>
+                      <FieldInput
+                        label="템플릿명"
+                        value={editingMealTemplateDraft.label}
+                        onChangeText={(label) => setEditingMealTemplateDraft((prev) => ({ ...prev, label }))}
+                        placeholder="템플릿 이름"
+                      />
+                      <SelectRow
+                        label="슬롯"
+                        options={mealSlots.map((item) => ({ value: item.value, label: item.label }))}
+                        selected={editingMealTemplateDraft.mealSlot}
+                        onSelect={(value) =>
+                          setEditingMealTemplateDraft((prev) => ({ ...prev, mealSlot: value as MealSlot }))
+                        }
+                      />
+                      <View style={styles.recordActions}>
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => {
+                            void saveMealTemplateEdit();
+                          }}
+                        >
+                          <Text style={styles.secondaryButtonText}>저장</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => setEditingMealTemplateId(null)}
+                        >
+                          <Text style={styles.secondaryButtonText}>취소</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.recordListTextBlock}>
+                        <Text style={styles.recordListTitle}>
+                          {template.label} ({mealSlots.find((slot) => slot.value === template.mealSlot)?.label ?? template.mealSlot})
+                        </Text>
+                        <Text style={styles.hint}>{template.isActive ? "활성" : "비활성"}</Text>
+                      </View>
+                      <View style={styles.recordActions}>
+                        {template.isActive ? (
+                          <Pressable style={styles.secondaryButton} onPress={() => startMealTemplateEdit(template)}>
+                            <Text style={styles.secondaryButtonText}>수정</Text>
+                          </Pressable>
+                        ) : null}
+                        {template.isActive ? (
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => void deactivateMealTemplate(template.id)}
+                          >
+                            <Text style={styles.secondaryButtonText}>비활성화</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </>
+                  )}
                 </View>
               ))}
             </View>
@@ -1081,17 +1606,137 @@ export default function App(): React.JSX.Element {
             </Pressable>
 
             <Text style={styles.hint}>등록된 운동 템플릿</Text>
-            <View style={styles.chipRowWrap}>
+            <View style={styles.templateList}>
               {workoutTemplates.length === 0 ? <Text style={styles.hint}>등록된 템플릿이 없습니다.</Text> : null}
               {workoutTemplates.map((template) => (
-                <View key={template.id} style={styles.pillRow}>
-                  <Text style={styles.pillLabel}>{template.label}</Text>
-                  <Text style={styles.hint}>{template.isActive ? "ON" : "OFF"}</Text>
+                <View key={template.id} style={styles.recordItem}>
+                  {editingWorkoutTemplateId === template.id ? (
+                    <>
+                      <FieldInput
+                        label="템플릿명"
+                        value={editingWorkoutTemplateDraft.label}
+                        onChangeText={(label) => setEditingWorkoutTemplateDraft((prev) => ({ ...prev, label }))}
+                        placeholder="템플릿 이름"
+                      />
+                      <FieldInput
+                        label="기본 시간(분)"
+                        value={editingWorkoutTemplateDraft.defaultDuration}
+                        onChangeText={(defaultDuration) =>
+                          setEditingWorkoutTemplateDraft((prev) => ({ ...prev, defaultDuration }))
+                        }
+                        placeholder="30"
+                        keyboardType="numeric"
+                      />
+                      <SelectRow
+                        label="부위"
+                        options={bodyPartOptions.map((item) => ({ value: item.value, label: item.label }))}
+                        selected={editingWorkoutTemplateDraft.bodyPart}
+                        onSelect={(value) =>
+                          setEditingWorkoutTemplateDraft((prev) => ({ ...prev, bodyPart: value as BodyPart }))
+                        }
+                      />
+                      <SelectRow
+                        label="목적"
+                        options={purposeOptions.map((item) => ({ value: item.value, label: item.label }))}
+                        selected={editingWorkoutTemplateDraft.purpose}
+                        onSelect={(value) =>
+                          setEditingWorkoutTemplateDraft((prev) => ({ ...prev, purpose: value as WorkoutPurpose }))
+                        }
+                      />
+                      <SelectRow
+                        label="도구"
+                        options={toolOptions.map((item) => ({ value: item.value, label: item.label }))}
+                        selected={editingWorkoutTemplateDraft.tool}
+                        onSelect={(value) => setEditingWorkoutTemplateDraft((prev) => ({ ...prev, tool: value as WorkoutTool }))}
+                      />
+                      <View style={styles.recordActions}>
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => {
+                            void saveWorkoutTemplateEdit();
+                          }}
+                        >
+                          <Text style={styles.secondaryButtonText}>저장</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.secondaryButton}
+                          onPress={() => setEditingWorkoutTemplateId(null)}
+                        >
+                          <Text style={styles.secondaryButtonText}>취소</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.recordListTextBlock}>
+                        <Text style={styles.recordListTitle}>{template.label}</Text>
+                        <Text style={styles.hint}>
+                          {template.bodyPart} / {template.purpose} / {template.tool} /{" "}
+                          {template.defaultDuration ?? 30}분 / {template.isActive ? "활성" : "비활성"}
+                        </Text>
+                      </View>
+                      <View style={styles.recordActions}>
+                        {template.isActive ? (
+                          <Pressable style={styles.secondaryButton} onPress={() => startWorkoutTemplateEdit(template)}>
+                            <Text style={styles.secondaryButtonText}>수정</Text>
+                          </Pressable>
+                        ) : null}
+                        {template.isActive ? (
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => void deactivateWorkoutTemplate(template.id)}
+                          >
+                            <Text style={styles.secondaryButtonText}>비활성화</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </>
+                  )}
                 </View>
               ))}
             </View>
 
             <Text style={styles.sectionTitle}>리마인더</Text>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>활성화</Text>
+              <View style={styles.chipRowWrap}>
+                <Pressable
+                  style={[styles.chip, reminder.isEnabled ? styles.chipActive : null]}
+                  onPress={() => setReminder((prev) => ({ ...prev, isEnabled: true }))}
+                >
+                  <Text style={styles.chipText}>사용</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.chip, !reminder.isEnabled ? styles.chipActive : null]}
+                  onPress={() => setReminder((prev) => ({ ...prev, isEnabled: false }))}
+                >
+                  <Text style={styles.chipText}>미사용</Text>
+                </Pressable>
+              </View>
+            </View>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>채널</Text>
+              <View style={styles.chipRowWrap}>
+                <Pressable
+                  style={[styles.chip, reminder.channels.includes("web_in_app") ? styles.chipActive : null]}
+                  onPress={() => toggleReminderChannel("web_in_app")}
+                >
+                  <Text style={styles.chipText}>인앱</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.chip, reminder.channels.includes("web_push") ? styles.chipActive : null]}
+                  onPress={() => toggleReminderChannel("web_push")}
+                >
+                  <Text style={styles.chipText}>브라우저 푸시</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.chip, reminder.channels.includes("mobile_local") ? styles.chipActive : null]}
+                  onPress={() => toggleReminderChannel("mobile_local")}
+                >
+                  <Text style={styles.chipText}>모바일 로컬</Text>
+                </Pressable>
+              </View>
+            </View>
             <FieldInput
               label="일일 알림"
               value={reminder.dailyReminderTime}
@@ -1103,6 +1748,12 @@ export default function App(): React.JSX.Element {
               value={reminder.missingLogReminderTime}
               onChangeText={(value) => setReminder((prev) => ({ ...prev, missingLogReminderTime: value }))}
               placeholder="21:30"
+            />
+            <FieldInput
+              label="타임존"
+              value={reminder.timezone}
+              onChangeText={(value) => setReminder((prev) => ({ ...prev, timezone: value }))}
+              placeholder="Asia/Seoul"
             />
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveReminder}>
               <Text style={styles.primaryButtonText}>리마인더 저장</Text>
@@ -1140,7 +1791,31 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
+    gap: spacing.md
+  },
+  topBarSub: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2
+  },
+  topActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
     alignItems: "center"
+  },
+  sessionBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  sessionBadgeText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "600"
   },
   brand: {
     fontSize: 24,
@@ -1278,31 +1953,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14
   },
-  pillRow: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    backgroundColor: "#fff",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.sm,
-    minWidth: "48%"
-  },
-  pillLabel: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: "600"
-  },
   primaryButton: {
     backgroundColor: colors.brand,
     borderRadius: 999,
     paddingVertical: 12,
     paddingHorizontal: 14,
     alignItems: "center",
-    justifyContent: "center"
+    justifyContent: "center",
+    alignSelf: "stretch"
   },
   primaryButtonText: {
     color: colors.brandOn,
@@ -1314,5 +1972,63 @@ const styles = StyleSheet.create({
   },
   form: {
     gap: spacing.sm
+  },
+  templateList: {
+    gap: spacing.sm
+  },
+  recordList: {
+    gap: spacing.sm,
+    marginTop: spacing.xs
+  },
+  recordItem: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: spacing.sm
+  },
+  recordListItem: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm
+  },
+  recordListTextBlock: {
+    flex: 1,
+    gap: 4
+  },
+  recordListTitle: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "600"
+  },
+  recordActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    flexWrap: "wrap"
+  },
+  secondaryButton: {
+    backgroundColor: "#fff",
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 68
+  },
+  secondaryButtonText: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700"
   }
 });
