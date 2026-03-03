@@ -16,7 +16,6 @@ export async function PATCH(request: Request, context: RouteContext) {
       sessionId,
       id,
       label: body.label,
-      mealSlot: body.mealSlot,
       isActive: body.isActive
     });
 
@@ -31,7 +30,6 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const updated = await repo.updateMealTemplate(session.userId, parsed.data.id, {
       ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
-      ...(parsed.data.mealSlot !== undefined ? { mealSlot: parsed.data.mealSlot } : {}),
       ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {})
     });
 

@@ -735,7 +735,7 @@ test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
   assert.equal(dayPayload.data.mealCheckins.length, 0);
 });
 
-test("POST /v1/meal-checkins는 completed=true일 때 슬롯별 템플릿이 필수다", async () => {
+test("POST /v1/meal-checkins는 completed=true일 때 활성 템플릿이 필수다", async () => {
   const session = await makeSession();
   await createActiveMealTemplateForSlot(session.sessionId, "lunch", "점심 템플릿");
 
@@ -753,7 +753,7 @@ test("POST /v1/meal-checkins는 completed=true일 때 슬롯별 템플릿이 필
   );
   assert.equal(noTemplateResponse.status, 400);
   const noTemplatePayload = (await noTemplateResponse.json()) as { error?: { message?: string } };
-  assert.equal(noTemplatePayload.error?.message, "해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+  assert.equal(noTemplatePayload.error?.message, "활성 식단 템플릿이 필요합니다.");
 
   const mismatchTemplate = await createActiveMealTemplateForSlot(session.sessionId, "dinner", "저녁 템플릿");
   const mismatchResponse = await createMealCheckin(
@@ -769,13 +769,28 @@ test("POST /v1/meal-checkins는 completed=true일 때 슬롯별 템플릿이 필
       })
     })
   );
-  assert.equal(mismatchResponse.status, 400);
-  const mismatchPayload = (await mismatchResponse.json()) as { error?: { message?: string } };
-  assert.equal(mismatchPayload.error?.message, "선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+  assert.equal(mismatchResponse.status, 201);
 });
 
 test("POST/PATCH/DELETE /v1/workout-checkins works with am/pm slots", async () => {
   const session = await makeSession();
+  const workoutTemplateResponse = await createWorkoutTemplate(
+    new Request("http://localhost/api/v1/templates/workouts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        label: "오전 루틴",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        defaultDuration: 25,
+        isActive: true
+      })
+    })
+  );
+  assert.equal(workoutTemplateResponse.status, 201);
+  const workoutTemplate = (await workoutTemplateResponse.json()) as { data: { id: string } };
 
   const createdResponse = await createWorkoutCheckin(
     new Request("http://localhost/api/v1/workout-checkins", {
@@ -785,7 +800,8 @@ test("POST/PATCH/DELETE /v1/workout-checkins works with am/pm slots", async () =
         sessionId: session.sessionId,
         date: "2026-03-01",
         slot: "am",
-        completed: true
+        completed: true,
+        templateId: workoutTemplate.data.id
       })
     })
   );
@@ -826,6 +842,26 @@ test("POST/PATCH/DELETE /v1/workout-checkins works with am/pm slots", async () =
     data: { workoutLogs: Array<{ id: string }> };
   };
   assert.equal(dayPayload.data.workoutLogs.length, 0);
+});
+
+test("POST /v1/workout-checkins requires active template when completed=true", async () => {
+  const session = await makeSession();
+
+  const missingTemplate = await createWorkoutCheckin(
+    new Request("http://localhost/api/v1/workout-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        slot: "pm",
+        completed: true
+      })
+    })
+  );
+  assert.equal(missingTemplate.status, 400);
+  const missingTemplatePayload = (await missingTemplate.json()) as { error?: { message?: string } };
+  assert.equal(missingTemplatePayload.error?.message, "활성 운동 템플릿이 필요합니다.");
 });
 
 test("DELETE /v1/workout-logs/:id and /v1/body-metrics/:id soft-delete records", async () => {

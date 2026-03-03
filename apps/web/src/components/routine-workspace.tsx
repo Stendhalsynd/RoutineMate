@@ -189,6 +189,72 @@ function formatDday(daysToDday?: number): string {
   return `D+${Math.abs(daysToDday)}`;
 }
 
+function buildDecimalOptions(min: number, max: number, step: number): string[] {
+  const options: string[] = [];
+  for (let value = min; value <= max + 0.00001; value += step) {
+    options.push(value.toFixed(1));
+  }
+  return options;
+}
+
+function buildIntegerOptions(min: number, max: number): string[] {
+  const options: string[] = [];
+  for (let value = min; value <= max; value += 1) {
+    options.push(String(value));
+  }
+  return options;
+}
+
+function DateField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field full-span date-field">
+      <span>{label}</span>
+      <div className="date-field-control">
+        <span>{value || "날짜 선택"}</span>
+      </div>
+      <input type="date" value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+  suffix,
+  allowEmpty = true
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  suffix?: string;
+  allowEmpty?: boolean;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {allowEmpty ? <option value="">미설정</option> : null}
+        {options.map((item) => (
+          <option key={item} value={item}>
+            {suffix ? `${item}${suffix}` : item}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 async function fetchSession(): Promise<Session | null> {
   const response = await fetch("/api/v1/auth/session");
   if (!response.ok) {
@@ -282,12 +348,13 @@ async function fetchBootstrap(
   sessionId: string,
   view: WorkspaceView,
   date: string,
-  range: RangeKey
+  range: RangeKey,
+  fresh = false
 ): Promise<BootstrapPayload> {
   const response = await fetch(
     `/api/v1/bootstrap?sessionId=${encodeURIComponent(sessionId)}&view=${encodeURIComponent(view)}&date=${encodeURIComponent(
       date
-    )}&range=${encodeURIComponent(range)}`
+    )}&range=${encodeURIComponent(range)}${fresh ? "&fresh=1" : ""}`
   );
   if (!response.ok) {
     throw new Error(await parseErrorMessage(response, "초기 데이터 조회에 실패했습니다."));
@@ -417,9 +484,8 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     bodyFatPct: ""
   });
 
-  const [mealTemplateForm, setMealTemplateForm] = useState<{ label: string; mealSlot: MealSlot }>({
-    label: "",
-    mealSlot: "lunch"
+  const [mealTemplateForm, setMealTemplateForm] = useState<{ label: string }>({
+    label: ""
   });
 
   const [workoutTemplateForm, setWorkoutTemplateForm] = useState<{
@@ -437,9 +503,8 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   });
 
   const [editingMealTemplateId, setEditingMealTemplateId] = useState<string | null>(null);
-  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = useState<{ label: string; mealSlot: MealSlot }>({
-    label: "",
-    mealSlot: "lunch"
+  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = useState<{ label: string }>({
+    label: ""
   });
 
   const [editingWorkoutTemplateId, setEditingWorkoutTemplateId] = useState<string | null>(null);
@@ -465,6 +530,10 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     timezone: "Asia/Seoul"
   });
   const [isGoogleUpgrading, setIsGoogleUpgrading] = useState(false);
+
+  const weeklyTargetOptions = useMemo(() => buildIntegerOptions(1, 21), []);
+  const weightOptions = useMemo(() => buildDecimalOptions(30, 200, 0.1), []);
+  const bodyFatOptions = useMemo(() => buildDecimalOptions(3, 60, 0.1), []);
 
   const sessionQuery = useQuery({
     queryKey: queryKeys.session,
@@ -875,6 +944,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     void queryClient.invalidateQueries({ queryKey: ["bootstrap", sessionId] });
     void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+    void queryClient.prefetchQuery({
+      queryKey: queryKeys.bootstrap(sessionId, "dashboard", selectedDate, range),
+      queryFn: () => fetchBootstrap(sessionId, "dashboard", selectedDate, range, true),
+      staleTime: 0
+    });
   }
 
   async function upsertMealCheckin(slot: MealSlot, completed: boolean, templateId?: string): Promise<void> {
@@ -886,21 +960,20 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     const dayKey = queryKeys.day(sessionId, selectedDate);
     const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
     const existing = previous.mealCheckins.find((item) => item.slot === slot && item.isDeleted !== true);
-    const slotTemplates = activeMealTemplates.filter((item) => item.mealSlot === slot);
     const selectedTemplateId = completed
       ? (() => {
-          if (templateId && slotTemplates.some((item) => item.id === templateId)) {
+          if (templateId && activeMealTemplates.some((item) => item.id === templateId)) {
             return templateId;
           }
-          if (existing?.templateId && slotTemplates.some((item) => item.id === existing.templateId)) {
+          if (existing?.templateId && activeMealTemplates.some((item) => item.id === existing.templateId)) {
             return existing.templateId;
           }
-          return slotTemplates[0]?.id;
+          return activeMealTemplates[0]?.id;
         })()
       : undefined;
 
     if (completed && !selectedTemplateId) {
-      setRecordsMessage({ type: "error", text: "해당 슬롯의 활성 식단 템플릿이 필요합니다." });
+      setRecordsMessage({ type: "error", text: "활성 식단 템플릿이 필요합니다." });
       return;
     }
 
@@ -1017,7 +1090,24 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     const dayKey = queryKeys.day(sessionId, selectedDate);
     const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
     const existing = previous.workoutLogs.find((item) => item.workoutSlot === slot && item.isDeleted !== true);
-    const selectedTemplate = templateId ? activeWorkoutTemplates.find((item) => item.id === templateId) : undefined;
+    const selectedTemplateId = completed
+      ? (() => {
+          if (templateId && activeWorkoutTemplates.some((item) => item.id === templateId)) {
+            return templateId;
+          }
+          if (existing?.templateId && activeWorkoutTemplates.some((item) => item.id === existing.templateId)) {
+            return existing.templateId;
+          }
+          return activeWorkoutTemplates[0]?.id;
+        })()
+      : undefined;
+    if (completed && !selectedTemplateId) {
+      setRecordsMessage({ type: "error", text: "활성 운동 템플릿이 필요합니다." });
+      return;
+    }
+    const selectedTemplate = selectedTemplateId
+      ? activeWorkoutTemplates.find((item) => item.id === selectedTemplateId)
+      : undefined;
     const defaults = defaultWorkoutBySlot(slot);
 
     const nextDraft = {
@@ -1041,7 +1131,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       workoutSlot: slot,
       completed,
       ...(nextDraft.durationMinutes !== undefined ? { durationMinutes: nextDraft.durationMinutes } : {}),
-      ...(templateId ? { templateId } : {}),
+      ...(selectedTemplateId ? { templateId: selectedTemplateId } : {}),
       createdAt: new Date().toISOString().slice(0, 10)
     };
 
@@ -1065,7 +1155,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
         date: selectedDate,
         slot,
         completed,
-        ...(templateId ? { templateId } : {})
+        ...(selectedTemplateId ? { templateId: selectedTemplateId } : {})
       })
     });
 
@@ -1307,7 +1397,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       id: tempId,
       userId: session?.userId ?? "temp-user",
       label: mealTemplateForm.label.trim(),
-      mealSlot: mealTemplateForm.mealSlot,
       isActive: true,
       createdAt: new Date().toISOString().slice(0, 10)
     };
@@ -1320,7 +1409,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       body: JSON.stringify({
         sessionId,
         label: mealTemplateForm.label.trim(),
-        mealSlot: mealTemplateForm.mealSlot,
         isActive: true
       })
     });
@@ -1348,7 +1436,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   async function updateMealTemplateAction(
     id: string,
-    updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>
+    updates: Partial<Pick<MealTemplate, "label" | "isActive">>
   ): Promise<void> {
     if (!sessionId) {
       return;
@@ -1367,7 +1455,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       body: JSON.stringify({
         sessionId,
         ...(updates.label !== undefined ? { label: updates.label } : {}),
-        ...(updates.mealSlot !== undefined ? { mealSlot: updates.mealSlot } : {}),
         ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
       })
     });
@@ -1520,8 +1607,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   function startMealTemplateEdit(item: MealTemplate): void {
     setEditingMealTemplateId(item.id);
     setEditingMealTemplateDraft({
-      label: item.label,
-      mealSlot: item.mealSlot
+      label: item.label
     });
   }
 
@@ -1534,8 +1620,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       return;
     }
     await updateMealTemplateAction(editingMealTemplateId, {
-      label: editingMealTemplateDraft.label.trim(),
-      mealSlot: editingMealTemplateDraft.mealSlot
+      label: editingMealTemplateDraft.label.trim()
     });
     setEditingMealTemplateId(null);
   }
@@ -1691,16 +1776,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <section className="card">
             <h2>기록 날짜</h2>
             <div className="form-grid">
-              <label className="field compact-field">
-                <span>날짜</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(event) => {
-                    setSelectedDate(event.target.value);
-                  }}
-                />
-              </label>
+              <DateField label="날짜" value={selectedDate} onChange={setSelectedDate} />
             </div>
             {recordsMessage ? (
               <p className={`status status-${recordsMessage.type}`} aria-live="polite">
@@ -1716,7 +1792,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <section className="card">
             <h2>식단 체크인</h2>
-            <p className="hint">아침/점심/저녁/저녁2 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</p>
+            <p className="hint">아침/점심/저녁/저녁2 슬롯에서 함/안함만 기록합니다. 활성 식단 템플릿은 전 슬롯 공통으로 표시됩니다.</p>
 
             {isRecordsLoading ? (
               <p className="hint">선택 날짜의 기록을 불러오는 중입니다.</p>
@@ -1724,7 +1800,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
               <div className="slot-grid">
                 {mealSlots.map((slot) => {
                   const current = checkinBySlot.get(slot.value);
-                  const slotTemplates = activeMealTemplates.filter((template) => template.mealSlot === slot.value);
                   return (
                     <article key={slot.value} className="slot-card">
                       <div className="slot-head">
@@ -1736,7 +1811,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                           type="button"
                           className="button button-primary"
                           onClick={() => void upsertMealCheckin(slot.value, true)}
-                          disabled={slotTemplates.length === 0}
+                          disabled={activeMealTemplates.length === 0}
                         >
                           함
                         </button>
@@ -1749,9 +1824,9 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                           </button>
                         ) : null}
                       </div>
-                      {slotTemplates.length > 0 ? (
+                      {activeMealTemplates.length > 0 ? (
                         <div className="chip-row">
-                          {slotTemplates.map((template) => (
+                          {activeMealTemplates.map((template) => (
                             <button
                               key={template.id}
                               type="button"
@@ -1763,7 +1838,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                           ))}
                         </div>
                       ) : (
-                        <p className="hint">설정 페이지에서 이 슬롯 템플릿을 추가하면 1탭 선택이 가능합니다.</p>
+                        <p className="hint">설정 페이지에서 식단 템플릿을 1개 이상 등록하면 1탭 선택이 가능합니다.</p>
                       )}
                     </article>
                   );
@@ -1774,7 +1849,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <section className="card">
             <h2>운동 체크인</h2>
-            <p className="hint">오전/오후 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</p>
+            <p className="hint">오전/오후 슬롯에서 함/안함만 기록합니다. 함 선택은 활성 운동 템플릿이 있을 때만 가능합니다.</p>
             <div className="slot-grid">
               {workoutSlots.map((slot) => {
                 const current = workoutCheckinBySlot.get(slot.value);
@@ -1789,7 +1864,12 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                       )}
                     </div>
                     <div className="slot-actions">
-                      <button type="button" className="button button-primary" onClick={() => void upsertWorkoutCheckin(slot.value, true)}>
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        onClick={() => void upsertWorkoutCheckin(slot.value, true)}
+                        disabled={activeWorkoutTemplates.length === 0}
+                      >
                         함
                       </button>
                       <button type="button" className="button" onClick={() => void upsertWorkoutCheckin(slot.value, false)}>
@@ -1826,30 +1906,25 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <section className="card">
             <h2>체중/체지방 기록</h2>
             <div className="form-grid">
-              <label className="field full-span">
-                <span>날짜</span>
-                <input
-                  type="date"
-                  value={bodyMetricForm.date}
-                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, date: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>체중(kg)</span>
-                <input
-                  type="number"
-                  value={bodyMetricForm.weightKg}
-                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, weightKg: event.target.value }))}
-                />
-              </label>
-              <label className="field">
-                <span>체지방(%)</span>
-                <input
-                  type="number"
-                  value={bodyMetricForm.bodyFatPct}
-                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, bodyFatPct: event.target.value }))}
-                />
-              </label>
+              <DateField
+                label="날짜"
+                value={bodyMetricForm.date}
+                onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, date: value }))}
+              />
+              <SelectField
+                label="체중(kg)"
+                value={bodyMetricForm.weightKg}
+                options={weightOptions}
+                suffix="kg"
+                onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, weightKg: value }))}
+              />
+              <SelectField
+                label="체지방(%)"
+                value={bodyMetricForm.bodyFatPct}
+                options={bodyFatOptions}
+                suffix="%"
+                onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, bodyFatPct: value }))}
+              />
             </div>
             <button
               type="button"
@@ -1928,40 +2003,33 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 </p>
               ) : null}
               <div className="form-grid">
-                <label className="field">
-                  <span>주간 루틴 목표(회)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={21}
-                    value={goalForm.weeklyRoutineTarget}
-                    onChange={(event) => setGoalForm((prev) => ({ ...prev, weeklyRoutineTarget: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>D-day</span>
-                  <input
-                    type="date"
-                    value={goalForm.dDay}
-                    onChange={(event) => setGoalForm((prev) => ({ ...prev, dDay: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>목표 체중(kg)</span>
-                  <input
-                    type="number"
-                    value={goalForm.targetWeightKg}
-                    onChange={(event) => setGoalForm((prev) => ({ ...prev, targetWeightKg: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>목표 체지방(%)</span>
-                  <input
-                    type="number"
-                    value={goalForm.targetBodyFat}
-                    onChange={(event) => setGoalForm((prev) => ({ ...prev, targetBodyFat: event.target.value }))}
-                  />
-                </label>
+                <SelectField
+                  label="주간 루틴 목표(회)"
+                  value={goalForm.weeklyRoutineTarget}
+                  options={weeklyTargetOptions}
+                  suffix="회"
+                  allowEmpty={false}
+                  onChange={(value) => setGoalForm((prev) => ({ ...prev, weeklyRoutineTarget: value }))}
+                />
+                <DateField
+                  label="D-day"
+                  value={goalForm.dDay}
+                  onChange={(value) => setGoalForm((prev) => ({ ...prev, dDay: value }))}
+                />
+                <SelectField
+                  label="목표 체중(kg)"
+                  value={goalForm.targetWeightKg}
+                  options={weightOptions}
+                  suffix="kg"
+                  onChange={(value) => setGoalForm((prev) => ({ ...prev, targetWeightKg: value }))}
+                />
+                <SelectField
+                  label="목표 체지방(%)"
+                  value={goalForm.targetBodyFat}
+                  options={bodyFatOptions}
+                  suffix="%"
+                  onChange={(value) => setGoalForm((prev) => ({ ...prev, targetBodyFat: value }))}
+                />
               </div>
               <button type="button" className="button button-primary full-width settings-submit" onClick={() => void saveGoal()}>
                 목표 저장
@@ -2082,19 +2150,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                     onChange={(event) => setMealTemplateForm((prev) => ({ ...prev, label: event.target.value }))}
                   />
                 </label>
-                <label className="field full-span">
-                  <span>기본 슬롯</span>
-                  <select
-                    value={mealTemplateForm.mealSlot}
-                    onChange={(event) => setMealTemplateForm((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))}
-                  >
-                    {mealSlots.map((slot) => (
-                      <option key={slot.value} value={slot.value}>
-                        {slot.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               </div>
               <button type="button" className="button button-primary full-width settings-submit" onClick={() => void createMealTemplateAction()}>
                 식단 템플릿 추가
@@ -2120,21 +2175,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                                 }
                               />
                             </label>
-                            <label className="field">
-                              <span>기본 슬롯</span>
-                              <select
-                                value={editingMealTemplateDraft.mealSlot}
-                                onChange={(event) =>
-                                  setEditingMealTemplateDraft((prev) => ({ ...prev, mealSlot: event.target.value as MealSlot }))
-                                }
-                              >
-                                {mealSlots.map((slot) => (
-                                  <option key={slot.value} value={slot.value}>
-                                    {slot.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
                           </div>
                           <div className="record-actions">
                             <button type="button" className="button button-primary" onClick={() => void saveMealTemplateEdit()}>
@@ -2149,9 +2189,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                         <>
                           <div>
                             <strong>{item.label}</strong>
-                            <p className="hint">
-                              {item.mealSlot} / {item.isActive ? "활성" : "비활성"}
-                            </p>
+                            <p className="hint">{item.isActive ? "활성" : "비활성"}</p>
                           </div>
                           <div className="record-actions">
                             {item.isActive ? (

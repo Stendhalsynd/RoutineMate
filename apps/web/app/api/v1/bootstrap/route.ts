@@ -42,7 +42,8 @@ export async function GET(request: Request) {
       sessionId,
       view: params.get("view") ?? undefined,
       date: params.get("date") ?? undefined,
-      range: params.get("range") ?? undefined
+      range: params.get("range") ?? undefined,
+      fresh: params.get("fresh") ?? undefined
     });
 
     if (!parsed.success) {
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
     }
 
     const fetchedAt = new Date().toISOString();
+    const forceFresh = parsed.data.fresh === "1" || parsed.data.fresh === "true";
     if (!parsed.data.sessionId) {
       return ok({ session: null, fetchedAt }, 200);
     }
@@ -149,6 +151,9 @@ export async function GET(request: Request) {
       payload.goal = goals[0] ?? null;
     }
 
+    if (forceFresh) {
+      payload.fetchedAt = new Date().toISOString();
+    }
     return ok(payload, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load bootstrap payload.";

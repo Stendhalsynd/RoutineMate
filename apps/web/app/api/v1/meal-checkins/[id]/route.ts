@@ -43,18 +43,18 @@ export async function PATCH(request: Request, context: RouteContext) {
       : undefined;
 
     const templates = await repo.listMealTemplatesByUser(session.userId);
-    const slotTemplates = templates.filter((item) => item.isActive && item.mealSlot === nextSlot);
-    const selectedTemplate = nextTemplateId ? slotTemplates.find((item) => item.id === nextTemplateId) : undefined;
+    const activeTemplates = templates.filter((item) => item.isActive);
+    const selectedTemplate = nextTemplateId ? activeTemplates.find((item) => item.id === nextTemplateId) : undefined;
 
     if (nextCompleted) {
-      if (!nextTemplateId || slotTemplates.length === 0) {
-        return badRequest("해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+      if (!nextTemplateId || activeTemplates.length === 0) {
+        return badRequest("활성 식단 템플릿이 필요합니다.");
       }
       if (!selectedTemplate) {
-        return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+        return badRequest("선택한 식단 템플릿이 비활성 상태이거나 존재하지 않습니다.");
       }
     } else if (nextTemplateId && !selectedTemplate) {
-      return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+      return badRequest("선택한 식단 템플릿이 비활성 상태이거나 존재하지 않습니다.");
     }
 
     const updates: Partial<Pick<(typeof current), "date" | "slot" | "completed" | "templateId">> = {

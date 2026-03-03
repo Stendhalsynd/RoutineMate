@@ -93,7 +93,7 @@ const schemas = [
   {
     label: "MealTemplates",
     envKey: "NOTION_DB_MEAL_TEMPLATES",
-    required: ["Name", "Id", "UserId", "Label", "MealSlot", "IsActive", "CreatedAt"],
+    required: ["Name", "Id", "UserId", "Label", "IsActive", "CreatedAt"],
     optional: []
   },
   {

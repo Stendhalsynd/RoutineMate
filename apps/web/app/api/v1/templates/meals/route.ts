@@ -32,7 +32,6 @@ export async function POST(request: Request) {
     const parsed = mealTemplateInputSchema.safeParse({
       sessionId,
       label: body.label,
-      mealSlot: body.mealSlot,
       isActive: body.isActive
     });
 
@@ -47,7 +46,6 @@ export async function POST(request: Request) {
 
     const created = await repo.createMealTemplate(session.userId, {
       label: parsed.data.label,
-      mealSlot: parsed.data.mealSlot,
       isActive: parsed.data.isActive
     });
 

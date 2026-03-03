@@ -471,14 +471,16 @@ function mapMealTemplate(page: NotionPage): MealTemplate | null {
   const label = getRichTextAny(page, ["Label", "FoodLabel"]) ?? getTitle(page, "Name");
   const mealSlot = getSelectAny(page, ["MealSlot", "MealType"]);
   const createdAt = getDate(page, "CreatedAt");
-  if (!userId || !label || !mealSlot || !createdAt) {
+  if (!userId || !label || !createdAt) {
     return null;
   }
+  const normalizedMealSlot =
+    mealSlot === "snack" ? "dinner2" : (mealSlot as MealSlot | undefined);
   return {
     id,
     userId,
     label,
-    mealSlot: mealSlot === "snack" ? "dinner2" : (mealSlot as MealSlot),
+    ...(normalizedMealSlot ? { mealSlot: normalizedMealSlot } : {}),
     isActive: getCheckbox(page, "IsActive") ?? true,
     createdAt: createdAt.slice(0, 10)
   };
@@ -723,7 +725,6 @@ async function ensureNotionSchemaValidated(): Promise<void> {
         "Id",
         "UserId",
         "Label",
-        "MealSlot",
         "IsActive",
         "CreatedAt"
       ]);
@@ -1742,7 +1743,7 @@ export const repo = {
         id: createId("mtpl"),
         userId,
         label: input.label,
-        mealSlot: input.mealSlot,
+        ...(input.mealSlot ? { mealSlot: input.mealSlot } : {}),
         isActive: input.isActive,
         createdAt: nowIso().slice(0, 10)
       };
@@ -1758,7 +1759,7 @@ export const repo = {
       id: createId("mtpl"),
       userId,
       label: input.label,
-      mealSlot: input.mealSlot,
+      ...(input.mealSlot ? { mealSlot: input.mealSlot } : {}),
       isActive: input.isActive,
       createdAt: nowIso().slice(0, 10)
     };
@@ -1767,7 +1768,6 @@ export const repo = {
       Id: richTextProperty(template.id),
       UserId: richTextProperty(template.userId),
       Label: richTextProperty(template.label),
-      MealSlot: selectProperty(template.mealSlot),
       IsActive: checkboxProperty(template.isActive),
       CreatedAt: dateProperty(template.createdAt)
     });
@@ -1796,7 +1796,7 @@ export const repo = {
   async updateMealTemplate(
     userId: string,
     id: string,
-    updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>
+    updates: Partial<Pick<MealTemplate, "label" | "isActive">>
   ): Promise<MealTemplate | null> {
     if (isMemoryMode()) {
       const index = store.mealTemplates.findIndex((item) => item.userId === userId && item.id === id);
@@ -1834,7 +1834,6 @@ export const repo = {
     await updateDatabasePage(page.id, {
       Name: titleProperty(next.label),
       Label: richTextProperty(next.label),
-      MealSlot: selectProperty(next.mealSlot),
       IsActive: checkboxProperty(next.isActive)
     });
     return next;

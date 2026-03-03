@@ -57,20 +57,20 @@ export async function POST(request: Request) {
     }
 
     const templates = await repo.listMealTemplatesByUser(session.userId);
-    const slotTemplates = templates.filter((item) => item.isActive && item.mealSlot === parsed.data.slot);
+    const activeTemplates = templates.filter((item) => item.isActive);
     const selectedTemplate = parsed.data.templateId
-      ? slotTemplates.find((item) => item.id === parsed.data.templateId)
+      ? activeTemplates.find((item) => item.id === parsed.data.templateId)
       : undefined;
 
     if (parsed.data.completed) {
-      if (!parsed.data.templateId || slotTemplates.length === 0) {
-        return badRequest("해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+      if (!parsed.data.templateId || activeTemplates.length === 0) {
+        return badRequest("활성 식단 템플릿이 필요합니다.");
       }
       if (!selectedTemplate) {
-        return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+        return badRequest("선택한 식단 템플릿이 비활성 상태이거나 존재하지 않습니다.");
       }
     } else if (parsed.data.templateId && !selectedTemplate) {
-      return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+      return badRequest("선택한 식단 템플릿이 비활성 상태이거나 존재하지 않습니다.");
     }
 
     const saved = await repo.addMealCheckin(session.userId, {

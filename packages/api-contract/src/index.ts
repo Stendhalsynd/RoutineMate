@@ -257,7 +257,8 @@ export const calendarRangeQuerySchema = z
 
 export const dashboardQuerySchema = z.object({
   sessionId: nonEmptyString,
-  range: rangeSchema.default("7d")
+  range: rangeSchema.default("7d"),
+  fresh: z.union([z.literal("1"), z.literal("true"), z.literal("0"), z.literal("false")]).optional()
 });
 
 export const workspaceViewSchema = z.enum(["dashboard", "records", "settings"]);
@@ -266,7 +267,8 @@ export const bootstrapQuerySchema = z.object({
   sessionId: nonEmptyString.optional(),
   view: workspaceViewSchema.default("dashboard"),
   date: isoDateSchema.optional(),
-  range: rangeSchema.default("7d")
+  range: rangeSchema.default("7d"),
+  fresh: z.union([z.literal("1"), z.literal("true"), z.literal("0"), z.literal("false")]).optional()
 });
 
 export const bootstrapResponseSchema = z.object({
@@ -326,7 +328,7 @@ export const softDeleteSchema = z.object({
 export const mealTemplateInputSchema = z.object({
   sessionId: nonEmptyString,
   label: nonEmptyString.max(120),
-  mealSlot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]),
+  mealSlot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]).optional(),
   isActive: z.boolean().default(true)
 });
 
@@ -338,7 +340,7 @@ export const mealTemplateUpdateSchema = z
     mealSlot: z.enum(["breakfast", "lunch", "dinner", "dinner2"]).optional(),
     isActive: z.boolean().optional()
   })
-  .refine((value) => value.label !== undefined || value.mealSlot !== undefined || value.isActive !== undefined, {
+  .refine((value) => value.label !== undefined || value.isActive !== undefined, {
     message: "At least one field is required"
   });
 

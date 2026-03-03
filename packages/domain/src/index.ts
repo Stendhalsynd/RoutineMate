@@ -174,7 +174,7 @@ export interface MealTemplate {
   id: string;
   userId: string;
   label: string;
-  mealSlot: MealSlot;
+  mealSlot?: MealSlot;
   isActive: boolean;
   createdAt: string;
 }

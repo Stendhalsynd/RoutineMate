@@ -64,14 +64,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const nextDate = parsed.data.date ?? current.date;
     const nextCompleted = parsed.data.completed ?? current.completed ?? true;
 
+    const templates = await repo.listWorkoutTemplatesByUser(session.userId);
+    const activeTemplates = templates.filter((item) => item.isActive);
     let selectedTemplate: WorkoutTemplate | undefined;
-    const nextTemplateId = parsed.data.templateId ?? current.templateId;
+    const nextTemplateId = nextCompleted ? (parsed.data.templateId ?? current.templateId) : parsed.data.templateId;
     if (nextTemplateId) {
-      const templates = await repo.listWorkoutTemplatesByUser(session.userId);
-      selectedTemplate = templates.find((item) => item.id === nextTemplateId);
-      if (!selectedTemplate) {
-        return notFound("Workout template was not found.");
+      selectedTemplate = activeTemplates.find((item) => item.id === nextTemplateId);
+    }
+
+    if (nextCompleted) {
+      if (!nextTemplateId || activeTemplates.length === 0) {
+        return badRequest("활성 운동 템플릿이 필요합니다.");
       }
+      if (!selectedTemplate) {
+        return badRequest("선택한 운동 템플릿이 비활성 상태이거나 존재하지 않습니다.");
+      }
+    } else if (nextTemplateId && !selectedTemplate) {
+      return badRequest("선택한 운동 템플릿이 비활성 상태이거나 존재하지 않습니다.");
     }
 
     const base = applyTemplateOrDefault(nextSlot, selectedTemplate);

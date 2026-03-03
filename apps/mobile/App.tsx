@@ -14,6 +14,8 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  Modal,
+  FlatList,
   Platform,
   StatusBar as RNStatusBar,
   View,
@@ -38,6 +40,16 @@ type Dashboard = {
   totalWorkouts: number;
   range: string;
   granularity: string;
+  buckets: Array<{
+    key: string;
+    label: string;
+    from: string;
+    to: string;
+    avgOverallScore: number;
+    mealCheckRate: number;
+    workoutRate: number;
+    bodyMetricRate: number;
+  }>;
   latestWeightKg?: number | null;
   latestBodyFatPct?: number | null;
 };
@@ -72,7 +84,7 @@ type MealSlot = "breakfast" | "lunch" | "dinner" | "dinner2";
 type MealTemplate = {
   id: string;
   label: string;
-  mealSlot: MealSlot;
+  mealSlot?: MealSlot;
   isActive: boolean;
 };
 
@@ -262,6 +274,73 @@ function formatDateLabel(value: string): string {
   return date.toLocaleDateString("ko-KR");
 }
 
+function formatBucketLabel(
+  bucket: Dashboard["buckets"][number],
+  granularity: Dashboard["granularity"]
+): string {
+  if (granularity === "day") {
+    return bucket.label;
+  }
+  return `${bucket.label} (${bucket.from.slice(5)}~${bucket.to.slice(5)})`;
+}
+
+type PickerOption = {
+  value: string;
+  label: string;
+};
+
+type OptionPickerState = {
+  title: string;
+  selected: string;
+  options: PickerOption[];
+  onSelect: (value: string) => void;
+};
+
+function buildDateOptions(daysBack: number, daysForward: number): PickerOption[] {
+  const base = new Date();
+  base.setHours(0, 0, 0, 0);
+  const options: PickerOption[] = [];
+  for (let diff = -daysBack; diff <= daysForward; diff += 1) {
+    const valueDate = new Date(base);
+    valueDate.setDate(base.getDate() + diff);
+    const value = valueDate.toISOString().slice(0, 10);
+    options.push({
+      value,
+      label: `${value} (${valueDate.toLocaleDateString("ko-KR", { weekday: "short" })})`
+    });
+  }
+  return options;
+}
+
+function buildTimeOptions(stepMinutes = 5): PickerOption[] {
+  const options: PickerOption[] = [];
+  for (let hour = 0; hour < 24; hour += 1) {
+    for (let minute = 0; minute < 60; minute += stepMinutes) {
+      const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      options.push({ value, label: value });
+    }
+  }
+  return options;
+}
+
+function buildDecimalOptions(min: number, max: number, step: number, unit: string): PickerOption[] {
+  const options: PickerOption[] = [];
+  for (let current = min; current <= max + 0.00001; current += step) {
+    const value = current.toFixed(1);
+    options.push({ value, label: `${value}${unit}` });
+  }
+  return options;
+}
+
+function buildIntegerOptions(min: number, max: number, unit = ""): PickerOption[] {
+  const options: PickerOption[] = [];
+  for (let current = min; current <= max; current += 1) {
+    const value = String(current);
+    options.push({ value, label: unit ? `${value}${unit}` : value });
+  }
+  return options;
+}
+
 function FieldInput({
   label,
   value,
@@ -279,6 +358,27 @@ function FieldInput({
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput style={styles.input} value={value} onChangeText={onChangeText} placeholder={placeholder} keyboardType={keyboardType} />
+    </View>
+  );
+}
+
+function PickerField({
+  label,
+  value,
+  placeholder,
+  onPress
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onPress: () => void;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Pressable style={styles.pickerInput} onPress={onPress}>
+        <Text style={[styles.pickerInputText, value ? null : styles.pickerPlaceholder]}>{value || placeholder}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -328,11 +428,9 @@ export default function App(): React.JSX.Element {
   const [workoutTemplates, setWorkoutTemplates] = React.useState<WorkoutTemplate[]>([]);
 
   const [mealTemplateLabel, setMealTemplateLabel] = React.useState("");
-  const [mealTemplateSlot, setMealTemplateSlot] = React.useState<MealSlot>("lunch");
   const [editingMealTemplateId, setEditingMealTemplateId] = React.useState<string | null>(null);
-  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = React.useState<{ label: string; mealSlot: MealSlot }>({
-    label: "",
-    mealSlot: "lunch"
+  const [editingMealTemplateDraft, setEditingMealTemplateDraft] = React.useState<{ label: string }>({
+    label: ""
   });
 
   const [workoutTemplateLabel, setWorkoutTemplateLabel] = React.useState("");
@@ -366,6 +464,7 @@ export default function App(): React.JSX.Element {
   const [isGoalDraftDirty, setGoalDraftDirty] = React.useState(false);
   const [isSyncing, setIsSyncing] = React.useState(false);
   const [reminderEvaluation, setReminderEvaluation] = React.useState<ReminderEvaluation | null>(null);
+  const dashboardCacheRef = React.useRef<Partial<Record<"7d" | "30d" | "90d", Dashboard>>>({});
 
   const [reminder, setReminder] = React.useState<ReminderSettings>({
     isEnabled: true,
@@ -374,6 +473,23 @@ export default function App(): React.JSX.Element {
     channels: DEFAULT_REMINDER_CHANNELS,
     timezone: DEFAULT_REMINDER_TIMEZONE
   });
+  const [optionPicker, setOptionPicker] = React.useState<OptionPickerState | null>(null);
+
+  const dateOptions = React.useMemo(() => buildDateOptions(365, 365), []);
+  const ddayOptions = React.useMemo(
+    () => [{ value: "", label: "미설정" }, ...buildDateOptions(0, 1095)],
+    []
+  );
+  const timeOptions = React.useMemo(() => buildTimeOptions(5), []);
+  const weeklyTargetOptions = React.useMemo(() => buildIntegerOptions(1, 21, "회"), []);
+  const weightOptions = React.useMemo(
+    () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(30, 200, 0.1, "kg")],
+    []
+  );
+  const bodyFatOptions = React.useMemo(
+    () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(3, 60, 0.1, "%")],
+    []
+  );
 
   const checkinBySlot = React.useMemo(() => {
     const map = new Map<MealSlot, MealCheckin>();
@@ -442,15 +558,16 @@ export default function App(): React.JSX.Element {
     return `세션: ${session.sessionId.slice(0, 10)}...`;
   }, [session]);
 
-  const refreshCoreSessionData = React.useCallback(async () => {
+  const refreshCoreSessionData = React.useCallback(async (fresh = false) => {
     if (!session) {
       return;
     }
 
     try {
       setIsSyncing(true);
+      const freshSuffix = fresh ? "&fresh=1" : "";
       const [dashboardData, goalData, reminderSettingsData] = await Promise.all([
-        apiFetch<Dashboard>(`/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}`),
+        apiFetch<Dashboard>(`/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}${freshSuffix}`),
         apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(session.sessionId)}`),
         apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`).then(
           (payload: { settings: ReminderSettings | null }) => payload
@@ -458,6 +575,9 @@ export default function App(): React.JSX.Element {
       ]);
 
       setDashboard(dashboardData ?? null);
+      if (dashboardData) {
+        dashboardCacheRef.current[range] = dashboardData;
+      }
       setGoal(goalData?.goal ?? null);
       if (reminderSettingsData?.settings) {
         setReminder(reminderSettingsData.settings);
@@ -468,6 +588,24 @@ export default function App(): React.JSX.Element {
         setGoalWeight(goalData?.goal?.targetWeightKg?.toString() ?? "");
         setGoalFat(goalData?.goal?.targetBodyFat?.toString() ?? "");
         setGoalDday(goalData?.goal?.dDay ?? "");
+      }
+
+      if (!fresh) {
+        const candidateRanges: Array<"7d" | "30d" | "90d"> = ["7d", "30d", "90d"];
+        for (const candidate of candidateRanges) {
+          if (candidate === range || dashboardCacheRef.current[candidate]) {
+            continue;
+          }
+          void apiFetch<Dashboard>(
+            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}`
+          )
+            .then((next) => {
+              dashboardCacheRef.current[candidate] = next;
+            })
+            .catch(() => {
+              // ignore background prefetch failures
+            });
+        }
       }
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "조회에 실패했습니다." });
@@ -524,9 +662,9 @@ export default function App(): React.JSX.Element {
       if (!session) {
         return;
       }
-      void refreshCoreSessionData();
+      await Promise.all([refreshCoreSessionData(true), loadDayData(selectedDate)]);
     },
-    [refreshCoreSessionData, session]
+    [loadDayData, refreshCoreSessionData, selectedDate, session]
   );
 
   React.useEffect(() => {
@@ -584,9 +722,13 @@ export default function App(): React.JSX.Element {
     if (!session) {
       return;
     }
+    const cachedDashboard = dashboardCacheRef.current[range];
+    if (cachedDashboard) {
+      setDashboard(cachedDashboard);
+    }
     void refreshCoreSessionData();
     void loadTemplateCatalog();
-  }, [loadTemplateCatalog, refreshCoreSessionData, session]);
+  }, [loadTemplateCatalog, range, refreshCoreSessionData, session]);
 
   React.useEffect(() => {
     if (tab !== "records") {
@@ -607,21 +749,20 @@ export default function App(): React.JSX.Element {
       }
 
       const existing = checkinBySlot.get(slot);
-      const slotTemplates = activeMealTemplates.filter((item) => item.mealSlot === slot);
       const selectedTemplateId = completed
         ? (() => {
-            if (templateId && slotTemplates.some((item) => item.id === templateId)) {
+            if (templateId && activeMealTemplates.some((item) => item.id === templateId)) {
               return templateId;
             }
-            if (existing?.templateId && slotTemplates.some((item) => item.id === existing.templateId)) {
+            if (existing?.templateId && activeMealTemplates.some((item) => item.id === existing.templateId)) {
               return existing.templateId;
             }
-            return slotTemplates[0]?.id;
+            return activeMealTemplates[0]?.id;
           })()
         : undefined;
 
       if (completed && !selectedTemplateId) {
-        setMessage({ type: "error", text: "해당 슬롯의 활성 식단 템플릿이 필요합니다." });
+        setMessage({ type: "error", text: "활성 식단 템플릿이 필요합니다." });
         return;
       }
 
@@ -732,14 +873,31 @@ export default function App(): React.JSX.Element {
       }
 
       const existing = workoutCheckinBySlot.get(slot);
-      const selectedTemplate = templateId ? activeWorkoutTemplates.find((item) => item.id === templateId) : undefined;
+      const selectedTemplateId = completed
+        ? (() => {
+            if (templateId && activeWorkoutTemplates.some((item) => item.id === templateId)) {
+              return templateId;
+            }
+            if (existing?.templateId && activeWorkoutTemplates.some((item) => item.id === existing.templateId)) {
+              return existing.templateId;
+            }
+            return activeWorkoutTemplates[0]?.id;
+          })()
+        : undefined;
+      if (completed && !selectedTemplateId) {
+        setMessage({ type: "error", text: "활성 운동 템플릿이 필요합니다." });
+        return;
+      }
+      const selectedTemplate = selectedTemplateId
+        ? activeWorkoutTemplates.find((item) => item.id === selectedTemplateId)
+        : undefined;
       const defaults = defaultWorkoutBySlot(slot);
       const payload = {
         sessionId: session.sessionId,
         date: selectedDate,
         slot,
         completed,
-        ...(templateId ? { templateId } : {})
+        ...(selectedTemplateId ? { templateId: selectedTemplateId } : {})
       };
 
       const optimistic: WorkoutLog = {
@@ -755,7 +913,7 @@ export default function App(): React.JSX.Element {
         ...((selectedTemplate?.defaultDuration ?? existing?.durationMinutes ?? defaults.durationMinutes) !== undefined
           ? { durationMinutes: selectedTemplate?.defaultDuration ?? existing?.durationMinutes ?? defaults.durationMinutes }
           : {}),
-        ...(templateId ? { templateId } : {})
+        ...(selectedTemplateId ? { templateId: selectedTemplateId } : {})
       };
 
       const previousDay = day;
@@ -928,8 +1086,8 @@ export default function App(): React.JSX.Element {
     }
 
     const weeklyRoutineTarget = parseNumber(goalTarget);
-    if (!weeklyRoutineTarget || weeklyRoutineTarget < 1 || weeklyRoutineTarget > 30) {
-      setMessage({ type: "error", text: "주간 루틴 목표는 1~30 범위여야 합니다." });
+    if (!weeklyRoutineTarget || weeklyRoutineTarget < 1 || weeklyRoutineTarget > 21) {
+      setMessage({ type: "error", text: "주간 루틴 목표는 1~21 범위여야 합니다." });
       return;
     }
 
@@ -969,7 +1127,6 @@ export default function App(): React.JSX.Element {
     const newTemplate: MealTemplate = {
       id: `tmp-meal-template-${Date.now()}`,
       label: trimmed,
-      mealSlot: mealTemplateSlot,
       isActive: true
     };
 
@@ -983,7 +1140,6 @@ export default function App(): React.JSX.Element {
         body: JSON.stringify({
           sessionId: session.sessionId,
           label: trimmed,
-          mealSlot: mealTemplateSlot,
           isActive: true
         })
       });
@@ -995,10 +1151,10 @@ export default function App(): React.JSX.Element {
       setMealTemplates(previous);
       setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 템플릿 저장 실패" });
     }
-  }, [mealTemplateLabel, mealTemplateSlot, mealTemplates, session]);
+  }, [mealTemplateLabel, mealTemplates, session]);
 
   const updateMealTemplate = React.useCallback(
-    async (id: string, updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>) => {
+    async (id: string, updates: Partial<Pick<MealTemplate, "label" | "isActive">>) => {
       if (!session) {
         setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
@@ -1015,7 +1171,6 @@ export default function App(): React.JSX.Element {
           body: JSON.stringify({
             sessionId: session.sessionId,
             ...(updates.label !== undefined ? { label: updates.label } : {}),
-            ...(updates.mealSlot !== undefined ? { mealSlot: updates.mealSlot } : {}),
             ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
           })
         });
@@ -1041,11 +1196,10 @@ export default function App(): React.JSX.Element {
       return;
     }
     await updateMealTemplate(editingMealTemplateId, {
-      label: trimmed,
-      mealSlot: editingMealTemplateDraft.mealSlot
+      label: trimmed
     });
     setEditingMealTemplateId(null);
-  }, [editingMealTemplateDraft.label, editingMealTemplateDraft.mealSlot, editingMealTemplateId, updateMealTemplate]);
+  }, [editingMealTemplateDraft.label, editingMealTemplateId, updateMealTemplate]);
 
   const deactivateMealTemplate = React.useCallback(async (id: string) => {
     await updateMealTemplate(id, { isActive: false });
@@ -1053,7 +1207,7 @@ export default function App(): React.JSX.Element {
 
   const startMealTemplateEdit = React.useCallback((template: MealTemplate) => {
     setEditingMealTemplateId(template.id);
-    setEditingMealTemplateDraft({ label: template.label, mealSlot: template.mealSlot });
+    setEditingMealTemplateDraft({ label: template.label });
   }, []);
 
   const createWorkoutTemplate = React.useCallback(async () => {
@@ -1205,6 +1359,17 @@ export default function App(): React.JSX.Element {
     });
   }, []);
 
+  const openOptionPicker = React.useCallback(
+    (title: string, options: PickerOption[], selected: string, onSelect: (value: string) => void) => {
+      setOptionPicker({ title, options, selected, onSelect });
+    },
+    []
+  );
+
+  const closeOptionPicker = React.useCallback(() => {
+    setOptionPicker(null);
+  }, []);
+
   const saveReminder = React.useCallback(async () => {
     if (!session) {
       setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
@@ -1275,7 +1440,7 @@ export default function App(): React.JSX.Element {
       });
       setSession(payload);
       setMessage({ type: "success", text: "Google 로그인이 완료되었습니다." });
-      void refreshCoreSessionData();
+      void refreshCoreSessionData(true);
       void loadTemplateCatalog();
     } catch (error) {
       if (isErrorWithCode(error)) {
@@ -1377,8 +1542,34 @@ export default function App(): React.JSX.Element {
             <Text style={styles.hint}>
               현재 기준: {range === "7d" ? "Day" : range === "30d" ? "Week" : "Month"} {isSyncing ? "(동기화 중)" : ""}
             </Text>
-            <Text style={styles.value}>체크인율 {Math.round(dashboard?.adherenceRate ?? 0)}%</Text>
-            <Text style={styles.hint}>식단 {dashboard?.totalMeals ?? 0}건 / 운동 {dashboard?.totalWorkouts ?? 0}건</Text>
+            <View style={styles.kpiRow}>
+              <View style={styles.kpiCard}>
+                <Text style={styles.kpiLabel}>체크인율</Text>
+                <Text style={styles.kpiValue}>{Math.round(dashboard?.adherenceRate ?? 0)}%</Text>
+              </View>
+              <View style={styles.kpiCard}>
+                <Text style={styles.kpiLabel}>식단/운동</Text>
+                <Text style={styles.kpiValueSmall}>
+                  {dashboard?.totalMeals ?? 0} / {dashboard?.totalWorkouts ?? 0}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.trendCard}>
+              <Text style={styles.sectionSubTitle}>미니 트렌드</Text>
+              {dashboard?.buckets?.length ? (
+                dashboard.buckets.map((bucket) => (
+                  <View key={bucket.key} style={styles.trendRow}>
+                    <Text style={styles.trendLabel}>{formatBucketLabel(bucket, dashboard.granularity)}</Text>
+                    <View style={styles.trendTrack}>
+                      <View style={[styles.trendFill, { width: `${Math.max(0, Math.min(100, bucket.avgOverallScore))}%` }]} />
+                    </View>
+                    <Text style={styles.trendValue}>{bucket.avgOverallScore}</Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.hint}>기록이 쌓이면 추세를 표시합니다.</Text>
+              )}
+            </View>
             {goal ? <Text style={styles.hint}>현재 목표: 주 {goal.weeklyRoutineTarget}회</Text> : <Text style={styles.hint}>현재 목표: 미설정</Text>}
             <Text style={styles.hint}>최근 체중 {dashboard?.latestWeightKg ?? "-"}kg / 체지방 {dashboard?.latestBodyFatPct ?? "-"}%</Text>
           </View>
@@ -1387,11 +1578,16 @@ export default function App(): React.JSX.Element {
         {tab === "records" ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>기록</Text>
-            <FieldInput
+            <PickerField
               label="기록 날짜"
               value={selectedDate}
-              onChangeText={(value) => setSelectedDate(value)}
               placeholder="YYYY-MM-DD"
+              onPress={() =>
+                openOptionPicker("기록 날짜 선택", dateOptions, selectedDate, (value) => {
+                  setSelectedDate(value);
+                  closeOptionPicker();
+                })
+              }
             />
             {session && reminder.isEnabled && reminderEvaluation?.isMissingLogCandidate ? (
               <Text style={styles.messageInfo}>
@@ -1399,18 +1595,18 @@ export default function App(): React.JSX.Element {
               </Text>
             ) : null}
             <Text style={styles.sectionTitle}>식단 체크인</Text>
+            <Text style={styles.hint}>활성 식단 템플릿은 아침/점심/저녁/저녁2 슬롯에 공통으로 표시됩니다.</Text>
 
             {mealSlots.map((slot) => {
               const current = checkinBySlot.get(slot.value);
               const completed = current?.completed ?? false;
-              const templates = activeMealTemplates.filter((template) => template.mealSlot === slot.value);
               return (
             <View style={styles.subCard} key={slot.value}>
                   <Text style={styles.sectionSubTitle}>{slot.label}</Text>
                   <View style={styles.row}>
                     <Pressable
-                      style={[styles.chip, completed && styles.chipActive, templates.length === 0 && styles.chipDisabled]}
-                      disabled={templates.length === 0}
+                      style={[styles.chip, completed && styles.chipActive, activeMealTemplates.length === 0 && styles.chipDisabled]}
+                      disabled={activeMealTemplates.length === 0}
                       onPress={() => {
                         void upsertMealCheckin(slot.value, true, current?.templateId);
                       }}
@@ -1432,8 +1628,8 @@ export default function App(): React.JSX.Element {
                     ) : null}
                   </View>
                   <View style={styles.chipRowWrap}>
-                    {templates.length > 0 ? (
-                      templates.map((template) => (
+                    {activeMealTemplates.length > 0 ? (
+                      activeMealTemplates.map((template) => (
                         <Pressable
                           key={template.id}
                           style={[styles.chip, current?.templateId === template.id && styles.chipActive]}
@@ -1443,7 +1639,7 @@ export default function App(): React.JSX.Element {
                         </Pressable>
                       ))
                     ) : (
-                      <Text style={styles.hint}>이 슬롯 템플릿 등록 시 1탭 체크가 가능합니다.</Text>
+                      <Text style={styles.hint}>식단 템플릿을 1개 이상 등록하면 1탭 체크가 가능합니다.</Text>
                     )}
                   </View>
                   <View style={styles.actionGap} />
@@ -1452,7 +1648,7 @@ export default function App(): React.JSX.Element {
             })}
 
             <Text style={styles.sectionTitle}>운동 체크인</Text>
-            <Text style={styles.hint}>오전/오후 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</Text>
+            <Text style={styles.hint}>오전/오후 슬롯에서 함/안함만 기록합니다. 함 선택은 활성 운동 템플릿이 필요합니다.</Text>
             {workoutSlots.map((slot) => {
               const current = workoutCheckinBySlot.get(slot.value);
               return (
@@ -1460,7 +1656,8 @@ export default function App(): React.JSX.Element {
                   <Text style={styles.sectionSubTitle}>{slot.label}</Text>
                   <View style={styles.row}>
                     <Pressable
-                      style={[styles.chip, current?.completed === true && styles.chipActive]}
+                      style={[styles.chip, current?.completed === true && styles.chipActive, activeWorkoutTemplates.length === 0 && styles.chipDisabled]}
+                      disabled={activeWorkoutTemplates.length === 0}
                       onPress={() => {
                         void upsertWorkoutCheckin(slot.value, true, current?.templateId);
                       }}
@@ -1502,25 +1699,38 @@ export default function App(): React.JSX.Element {
             })}
 
             <Text style={styles.sectionTitle}>체중/체지방 기록</Text>
-            <FieldInput
+            <PickerField
               label="날짜"
               value={bodyMetricDate}
-              onChangeText={setBodyMetricDate}
               placeholder="YYYY-MM-DD"
+              onPress={() =>
+                openOptionPicker("체성분 날짜 선택", dateOptions, bodyMetricDate, (value) => {
+                  setBodyMetricDate(value);
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="체중(kg)"
               value={weightForm}
-              onChangeText={setWeightForm}
               placeholder="예: 70.0"
-              keyboardType="numeric"
+              onPress={() =>
+                openOptionPicker("체중 선택", weightOptions, weightForm, (value) => {
+                  setWeightForm(value);
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="체지방(%)"
               value={bodyFatForm}
-              onChangeText={setBodyFatForm}
               placeholder="예: 18.5"
-              keyboardType="numeric"
+              onPress={() =>
+                openOptionPicker("체지방 선택", bodyFatOptions, bodyFatForm, (value) => {
+                  setBodyFatForm(value);
+                  closeOptionPicker();
+                })
+              }
             />
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveBodyMetric}>
               <Text style={styles.primaryButtonText}>체성분 저장</Text>
@@ -1585,44 +1795,53 @@ export default function App(): React.JSX.Element {
             <Text style={styles.sectionTitle}>설정</Text>
 
             <Text style={styles.sectionTitle}>목표</Text>
-            <FieldInput
+            <PickerField
               label="주간 목표"
               value={goalTarget}
-              onChangeText={(value) => {
-                setGoalDraftDirty(true);
-                setGoalTarget(value);
-              }}
               placeholder="예: 4"
-              keyboardType="numeric"
+              onPress={() =>
+                openOptionPicker("주간 목표 선택", weeklyTargetOptions, goalTarget, (value) => {
+                  setGoalDraftDirty(true);
+                  setGoalTarget(value);
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="목표 체중"
               value={goalWeight}
-              onChangeText={(value) => {
-                setGoalDraftDirty(true);
-                setGoalWeight(value);
-              }}
               placeholder="목표 체중(kg)"
-              keyboardType="numeric"
+              onPress={() =>
+                openOptionPicker("목표 체중 선택", weightOptions, goalWeight, (value) => {
+                  setGoalDraftDirty(true);
+                  setGoalWeight(value);
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="목표 체지방"
               value={goalFat}
-              onChangeText={(value) => {
-                setGoalDraftDirty(true);
-                setGoalFat(value);
-              }}
               placeholder="목표 체지방(%)"
-              keyboardType="numeric"
+              onPress={() =>
+                openOptionPicker("목표 체지방 선택", bodyFatOptions, goalFat, (value) => {
+                  setGoalDraftDirty(true);
+                  setGoalFat(value);
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="D-Day"
               value={goalDday}
-              onChangeText={(value) => {
-                setGoalDraftDirty(true);
-                setGoalDday(value);
-              }}
               placeholder="YYYY-MM-DD"
+              onPress={() =>
+                openOptionPicker("D-Day 선택", ddayOptions, goalDday, (value) => {
+                  setGoalDraftDirty(true);
+                  setGoalDday(value);
+                  closeOptionPicker();
+                })
+              }
             />
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveGoal}>
               <Text style={styles.primaryButtonText}>목표 저장</Text>
@@ -1634,12 +1853,6 @@ export default function App(): React.JSX.Element {
               value={mealTemplateLabel}
               onChangeText={setMealTemplateLabel}
               placeholder="아침 식사 템플릿"
-            />
-            <SelectRow
-              label="슬롯"
-              options={mealSlots.map((item) => ({ value: item.value, label: item.label }))}
-              selected={mealTemplateSlot}
-              onSelect={(value) => setMealTemplateSlot(value as MealSlot)}
             />
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={createMealTemplate}>
               <Text style={styles.primaryButtonText}>식단 템플릿 추가</Text>
@@ -1657,14 +1870,6 @@ export default function App(): React.JSX.Element {
                         value={editingMealTemplateDraft.label}
                         onChangeText={(label) => setEditingMealTemplateDraft((prev) => ({ ...prev, label }))}
                         placeholder="템플릿 이름"
-                      />
-                      <SelectRow
-                        label="슬롯"
-                        options={mealSlots.map((item) => ({ value: item.value, label: item.label }))}
-                        selected={editingMealTemplateDraft.mealSlot}
-                        onSelect={(value) =>
-                          setEditingMealTemplateDraft((prev) => ({ ...prev, mealSlot: value as MealSlot }))
-                        }
                       />
                       <View style={styles.recordActions}>
                         <Pressable
@@ -1686,9 +1891,7 @@ export default function App(): React.JSX.Element {
                   ) : (
                     <>
                       <View style={styles.recordListTextBlock}>
-                        <Text style={styles.recordListTitle}>
-                          {template.label} ({mealSlots.find((slot) => slot.value === template.mealSlot)?.label ?? template.mealSlot})
-                        </Text>
+                        <Text style={styles.recordListTitle}>{template.label}</Text>
                         <Text style={styles.hint}>{template.isActive ? "활성" : "비활성"}</Text>
                       </View>
                       <View style={styles.recordActions}>
@@ -1880,17 +2083,27 @@ export default function App(): React.JSX.Element {
                 </Pressable>
               </View>
             </View>
-            <FieldInput
+            <PickerField
               label="일일 알림"
               value={reminder.dailyReminderTime}
-              onChangeText={(value) => setReminder((prev) => ({ ...prev, dailyReminderTime: value }))}
               placeholder="20:00"
+              onPress={() =>
+                openOptionPicker("일일 알림 시간", timeOptions, reminder.dailyReminderTime, (value) => {
+                  setReminder((prev) => ({ ...prev, dailyReminderTime: value }));
+                  closeOptionPicker();
+                })
+              }
             />
-            <FieldInput
+            <PickerField
               label="미기록 감지"
               value={reminder.missingLogReminderTime}
-              onChangeText={(value) => setReminder((prev) => ({ ...prev, missingLogReminderTime: value }))}
               placeholder="21:30"
+              onPress={() =>
+                openOptionPicker("미기록 감지 시간", timeOptions, reminder.missingLogReminderTime, (value) => {
+                  setReminder((prev) => ({ ...prev, missingLogReminderTime: value }));
+                  closeOptionPicker();
+                })
+              }
             />
             <FieldInput
               label="타임존"
@@ -1925,6 +2138,35 @@ export default function App(): React.JSX.Element {
           </View>
         ) : null}
       </ScrollView>
+
+      <Modal visible={Boolean(optionPicker)} transparent animationType="slide" onRequestClose={closeOptionPicker}>
+        <View style={styles.pickerBackdrop}>
+          <Pressable style={styles.pickerBackdropDismiss} onPress={closeOptionPicker} />
+          <View style={styles.pickerSheet}>
+            <Text style={styles.pickerTitle}>{optionPicker?.title ?? ""}</Text>
+            <FlatList
+              data={optionPicker?.options ?? []}
+              keyExtractor={(item) => item.value}
+              style={styles.pickerList}
+              contentContainerStyle={styles.pickerListContent}
+              initialNumToRender={20}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={[styles.pickerOption, optionPicker?.selected === item.value && styles.pickerOptionActive]}
+                  onPress={() => optionPicker?.onSelect(item.value)}
+                >
+                  <Text style={[styles.pickerOptionText, optionPicker?.selected === item.value && styles.pickerOptionTextActive]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              )}
+            />
+            <Pressable style={[styles.secondaryButton, styles.pickerCloseButton]} onPress={closeOptionPicker}>
+              <Text style={styles.secondaryButtonText}>닫기</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2070,6 +2312,73 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textPrimary
   },
+  kpiRow: {
+    flexDirection: "row",
+    gap: spacing.sm
+  },
+  kpiCard: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4
+  },
+  kpiLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  kpiValue: {
+    color: colors.textPrimary,
+    fontSize: 24,
+    fontWeight: "800"
+  },
+  kpiValueSmall: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "700"
+  },
+  trendCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 8
+  },
+  trendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  trendLabel: {
+    width: 96,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: "700"
+  },
+  trendTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#e8eeea",
+    overflow: "hidden"
+  },
+  trendFill: {
+    height: "100%",
+    backgroundColor: colors.brand
+  },
+  trendValue: {
+    width: 34,
+    textAlign: "right",
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "700"
+  },
   value: {
     fontSize: 18,
     fontWeight: "700",
@@ -2146,6 +2455,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14
+  },
+  pickerInput: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 12
+  },
+  pickerInputText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    fontWeight: "600"
+  },
+  pickerPlaceholder: {
+    color: colors.textSecondary,
+    fontWeight: "500"
   },
   primaryButton: {
     backgroundColor: colors.brand,
@@ -2224,5 +2550,58 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 13,
     fontWeight: "700"
+  },
+  pickerBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.28)"
+  },
+  pickerBackdropDismiss: {
+    flex: 1
+  },
+  pickerSheet: {
+    maxHeight: "72%",
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm
+  },
+  pickerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary
+  },
+  pickerList: {
+    maxHeight: 360
+  },
+  pickerListContent: {
+    gap: 6,
+    paddingBottom: spacing.md
+  },
+  pickerOption: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  pickerOptionActive: {
+    borderColor: colors.brand,
+    backgroundColor: "#e5f5ef"
+  },
+  pickerOptionText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    fontWeight: "600"
+  },
+  pickerOptionTextActive: {
+    color: colors.brand
+  },
+  pickerCloseButton: {
+    alignSelf: "flex-end"
   }
 });

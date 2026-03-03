@@ -393,6 +393,32 @@ p {
   color: var(--text);
 }
 
+.date-field {
+  position: relative;
+}
+
+.date-field-control {
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+}
+
+.date-field input[type="date"] {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40px;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .field input:focus,
 .field select:focus {
   border-color: var(--accent);

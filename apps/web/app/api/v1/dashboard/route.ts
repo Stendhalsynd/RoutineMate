@@ -50,7 +50,8 @@ export async function GET(request: Request) {
     const sessionId = resolveSessionId(request, params.get("sessionId")) ?? "";
     const parsed = dashboardQuerySchema.safeParse({
       sessionId,
-      range: params.get("range") ?? undefined
+      range: params.get("range") ?? undefined,
+      fresh: params.get("fresh") ?? undefined
     });
 
     if (!parsed.success) {
@@ -64,9 +65,12 @@ export async function GET(request: Request) {
 
     const window = buildRangeWindow(parsed.data.range);
     const cacheKey = `${session.userId}:${parsed.data.range}:${window.to}`;
+    const forceFresh = parsed.data.fresh === "1" || parsed.data.fresh === "true";
     const cached = dashboardCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      console.info(`[dashboard] cache-hit range=${parsed.data.range} elapsedMs=${Date.now() - startedAt}`);
+    if (!forceFresh && cached && cached.expiresAt > Date.now()) {
+      console.info(
+        `[dashboard] cache-hit range=${parsed.data.range} fresh=${forceFresh} elapsedMs=${Date.now() - startedAt}`
+      );
       return ok(cached.summary, 200);
     }
 
@@ -95,7 +99,9 @@ export async function GET(request: Request) {
       summary,
       expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS
     });
-    console.info(`[dashboard] cache-miss range=${parsed.data.range} elapsedMs=${Date.now() - startedAt}`);
+    console.info(
+      `[dashboard] cache-${forceFresh ? "bypass" : "miss"} range=${parsed.data.range} fresh=${forceFresh} elapsedMs=${Date.now() - startedAt}`
+    );
 
     return ok(summary, 200);
   } catch (error) {

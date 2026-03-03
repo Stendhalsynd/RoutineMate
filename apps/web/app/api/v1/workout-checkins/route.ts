@@ -52,13 +52,22 @@ export async function POST(request: Request) {
       return notFound("Session was not found.");
     }
 
+    const templates = await repo.listWorkoutTemplatesByUser(session.userId);
+    const activeTemplates = templates.filter((item) => item.isActive);
     let selectedTemplate: WorkoutTemplate | undefined;
     if (parsed.data.templateId) {
-      const templates = await repo.listWorkoutTemplatesByUser(session.userId);
-      selectedTemplate = templates.find((item) => item.id === parsed.data.templateId);
-      if (!selectedTemplate) {
-        return notFound("Workout template was not found.");
+      selectedTemplate = activeTemplates.find((item) => item.id === parsed.data.templateId);
+    }
+
+    if (parsed.data.completed) {
+      if (!parsed.data.templateId || activeTemplates.length === 0) {
+        return badRequest("활성 운동 템플릿이 필요합니다.");
       }
+      if (!selectedTemplate) {
+        return badRequest("선택한 운동 템플릿이 비활성 상태이거나 존재하지 않습니다.");
+      }
+    } else if (parsed.data.templateId && !selectedTemplate) {
+      return badRequest("선택한 운동 템플릿이 비활성 상태이거나 존재하지 않습니다.");
     }
 
     const base = applyTemplateOrDefault(parsed.data.slot, selectedTemplate);

@@ -261,3 +261,28 @@
 - 모바일: 로컬 Gradle 기반 `preview/release` APK 빌드 (`scripts/build-apk.sh`)
 - 릴리즈: GitHub Release APK 첨부 스크립트 + Discord CHANGELOG
 - 테스트: Android SDK/JDK/토큰 누락 시 명확 오류, 성공 시 산출물 업로드
+
+---
+
+## 10) S4-8 통합 개선 (템플릿 단순화 + 선택형 입력)
+
+### S4-8A 템플릿 단순화
+- 식단 템플릿 `mealSlot` 의존 제거(레거시 입력은 무시).
+- 기록 화면에서 식단 템플릿은 슬롯 공통 목록으로 노출.
+
+### S4-8B 체크인 게이팅
+- 식단/운동 `completed=true` 저장 시 활성 템플릿과 `templateId`를 서버에서 강제 검증.
+- 템플릿이 없으면 UI에서 `함` 비활성화.
+
+### S4-8C 동기화 개선
+- `GET /v1/dashboard`에 `fresh=1` 캐시 우회 쿼리 추가.
+- 기록 mutation 직후 fresh 재조회 + 낙관적 반영 유지.
+
+### S4-8D 입력 UX 개선
+- 모바일: 날짜/시간/수치를 바텀시트 선택형으로 전환.
+- 웹: 날짜는 필드 전체 클릭형 `DateField`, 수치는 선택형 필드로 전환.
+
+### S4-8E 검증
+- API route 테스트(식단/운동 템플릿 검증) 회귀 통과.
+- `npm run typecheck`, `npm run test` 통과.
+- `npm run notion:schema:check`에서 MealTemplates `MealSlot` 비필수로 점검.

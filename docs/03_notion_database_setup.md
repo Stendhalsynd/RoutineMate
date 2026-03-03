@@ -11,7 +11,7 @@
 - `FoodLabel`, `MealType`, `PortionSize`는 하위호환 필드로 유지 가능(필수 아님)
 
 ### 새로 추가해야 할 DB 페이지
-- `RoutineMate MealTemplates`
+- `RoutineMate MealTemplates` (`MealSlot` 컬럼은 S4-8부터 제거)
 - `RoutineMate WorkoutTemplates`
 
 ### .env / Vercel 환경변수 추가
@@ -161,7 +161,7 @@ APK 릴리즈(S4-4) 참고:
 ## Meals
 - `MealType`: `breakfast`, `lunch`, `dinner`, `snack`
 - `PortionSize`: `small`, `medium`, `large`
-- `MealSlot`: `breakfast`, `lunch`, `dinner`, `dinner2`
+- `MealSlot`: `breakfast`, `lunch`, `dinner`, `dinner2` (Meals DB 전용)
 
 ## Workouts
 - `WorkoutSlot`: `am`, `pm`
@@ -193,7 +193,7 @@ APK 릴리즈(S4-4) 참고:
 | `Id` | `Rich text` | Y | 템플릿 id |
 | `UserId` | `Rich text` | Y | 사용자 식별자 |
 | `Label` | `Rich text` | Y | 템플릿 이름 |
-| `MealSlot` | `Select` | Y | `breakfast/lunch/dinner/dinner2` |
+| `MealSlot` | `Select` | N | 레거시 필드(있어도 무시, 없어도 정상) |
 | `IsActive` | `Checkbox` | Y | 활성 여부 |
 | `CreatedAt` | `Date` | Y | 생성 시각 |
 
