@@ -13,7 +13,7 @@ export type WorkspaceView = "dashboard" | "records" | "settings";
 export type UiRangeLabel = "day" | "week" | "month";
 export type ReminderChannel = "web_in_app" | "web_push" | "mobile_local";
 export type AuthProvider = "guest" | "google";
-export type GoogleAuthMode = "id_token" | "auth_code_pkce";
+export type GoogleAuthMode = "id_token" | "auth_code_pkce" | "native_sdk";
 
 export interface ScoringPolicy {
   dietWeight: number;

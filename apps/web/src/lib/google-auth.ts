@@ -154,3 +154,20 @@ export function getGoogleWebClientId(): string {
 
   return clientId;
 }
+  }
+
+  return payload.id_token;
+}
+
+export function getGoogleWebClientId(): string {
+  const clientId =
+    process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ||
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
+
+  if (!clientId) {
+    throw new Error("Google OAuth is not configured. Missing env: GOOGLE_WEB_CLIENT_ID");
+  }
+
+  return clientId;
+}

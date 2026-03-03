@@ -25,7 +25,7 @@ export const isoDateSchema = z
 const nonEmptyString = z.string().trim().min(1);
 const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "Expected HH:MM");
 const googlePlatformSchema = z.enum(["web", "android"]);
-const googleAuthModeSchema = z.enum(["id_token", "auth_code_pkce"]);
+const googleAuthModeSchema = z.enum(["id_token", "auth_code_pkce", "native_sdk"]);
 
 export const rangeSchema = z.enum(["7d", "30d", "90d"]);
 

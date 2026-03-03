@@ -2080,3 +2080,13 @@ const styles = StyleSheet.create({
     fontWeight: "700"
   }
 });
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 68
+  },
+  secondaryButtonText: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700"
+  }
+});

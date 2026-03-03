@@ -12,7 +12,8 @@ export async function POST(request: Request) {
       authorizationCode: body.authorizationCode,
       codeVerifier: body.codeVerifier,
       redirectUri: body.redirectUri,
-      platform: body.platform
+      platform: body.platform,
+      mode: body.mode
     });
 
     if (!parsed.success) {
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
             redirectUri: parsed.data.redirectUri,
             platform: parsed.data.platform
           });
-    const profile = await verifyGoogleIdToken(idToken, parsed.data.platform);
+    const profile = await verifyGoogleIdToken(idToken, parsed.data.platform, parsed.data.mode);
     const session = await repo.createOrRestoreGoogleSession(profile);
     const response = ok(session, 200);
     setSessionCookie(response, session.sessionId);

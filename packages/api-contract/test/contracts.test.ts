@@ -188,15 +188,30 @@ test("google auth schemas accept web/android payloads", () => {
     redirectUri: "routinemate://oauth",
     platform: "android"
   });
+  const sessionByNativeSdk = googleSessionRequestSchema.safeParse({
+    idToken: "token",
+    platform: "android",
+    mode: "native_sdk"
+  });
   assert.equal(upgradeByToken.success, true);
   assert.equal(sessionByToken.success, true);
   assert.equal(upgradeByCode.success, true);
   assert.equal(sessionByCode.success, true);
+  assert.equal(sessionByNativeSdk.success, true);
 });
 
 test("google auth schemas reject payload when idToken/code pair is missing", () => {
   const result = googleSessionRequestSchema.safeParse({
     platform: "android"
+  });
+  assert.equal(result.success, false);
+});
+
+test("google auth schemas reject unsupported mode value", () => {
+  const result = googleSessionRequestSchema.safeParse({
+    idToken: "token",
+    platform: "android",
+    mode: "legacy_native"
   });
   assert.equal(result.success, false);
 });

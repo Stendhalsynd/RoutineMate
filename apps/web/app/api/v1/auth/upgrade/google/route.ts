@@ -14,7 +14,8 @@ export async function POST(request: Request) {
       authorizationCode: body.authorizationCode,
       codeVerifier: body.codeVerifier,
       redirectUri: body.redirectUri,
-      platform: body.platform
+      platform: body.platform,
+      mode: body.mode
     });
 
     if (!parsed.success) {
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
             redirectUri: parsed.data.redirectUri,
             platform: parsed.data.platform
           });
-    const profile = await verifyGoogleIdToken(idToken, parsed.data.platform);
+    const profile = await verifyGoogleIdToken(idToken, parsed.data.platform, parsed.data.mode);
     const upgraded = await repo.upgradeSessionWithGoogle(parsed.data.sessionId, profile);
     if (!upgraded) {
       return notFound("Session was not found.");

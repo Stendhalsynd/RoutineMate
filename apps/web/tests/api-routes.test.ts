@@ -176,6 +176,104 @@ test("POST /v1/auth/upgrade/google accepts auth code + PKCE flow", async () => {
   }
 });
 
+test("POST /v1/auth/google/session accepts native_sdk token with web aud + android azp", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url.startsWith("https://oauth2.googleapis.com/tokeninfo")) {
+      return new Response(
+        JSON.stringify({
+          sub: "google-native-sub",
+          email: "native-user@example.com",
+          email_verified: "true",
+          aud: "test-web-client-id",
+          azp: "test-android-client-id"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const response = await createGoogleSession(
+      new Request("http://localhost/api/v1/auth/google/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idToken: "opaque-native-token",
+          platform: "android",
+          mode: "native_sdk"
+        })
+      })
+    );
+    assert.equal(response.status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("POST /v1/auth/google/session rejects native_sdk token when azp mismatches Android client", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url.startsWith("https://oauth2.googleapis.com/tokeninfo")) {
+      return new Response(
+        JSON.stringify({
+          sub: "google-native-sub",
+          email: "native-user@example.com",
+          email_verified: "true",
+          aud: "test-web-client-id",
+          azp: "mismatched-android-client-id"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  try {
+    const response = await createGoogleSession(
+      new Request("http://localhost/api/v1/auth/google/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idToken: "opaque-native-token",
+          platform: "android",
+          mode: "native_sdk"
+        })
+      })
+    );
+    assert.equal(response.status, 500);
+    const payload = (await response.json()) as { error?: { message?: string } };
+    assert.equal(payload.error?.message, "허용되지 않은 Google Android OAuth 클라이언트입니다.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("GET /v1/dashboard without sessionId returns 400", async () => {
   const response = await getDashboard(new Request("http://localhost/api/v1/dashboard"));
   assert.equal(response.status, 400);
