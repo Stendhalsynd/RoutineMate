@@ -65,6 +65,8 @@ const schemas = [
       "Id",
       "UserId",
       "Date",
+      "WorkoutSlot",
+      "Completed",
       "BodyPart",
       "Purpose",
       "Tool",

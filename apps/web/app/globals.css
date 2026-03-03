@@ -439,6 +439,12 @@ p {
   gap: 8px;
 }
 
+.reminder-channel-row {
+  margin-top: 10px;
+  gap: 12px;
+  row-gap: 12px;
+}
+
 .recommend-chip {
   border: 1px solid var(--border);
   background: #f4faf7;
@@ -569,5 +575,10 @@ p {
   .bottom-nav-link.is-active {
     background: var(--accent);
     color: var(--accent-contrast);
+  }
+
+  .reminder-channel-row {
+    gap: 10px;
+    row-gap: 12px;
   }
 }

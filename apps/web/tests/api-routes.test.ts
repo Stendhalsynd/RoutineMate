@@ -3,6 +3,7 @@ import { beforeEach, test } from "node:test";
 
 import { POST as createGuest } from "../app/api/v1/auth/guest/route";
 import { POST as createGoogleSession } from "../app/api/v1/auth/google/session/route";
+import { GET as getAuthSession } from "../app/api/v1/auth/session/route";
 import { POST as createBodyMetric, PATCH as updateBodyMetric } from "../app/api/v1/body-metrics/route";
 import { GET as getCalendarDay } from "../app/api/v1/calendar/day/route";
 import { GET as getBootstrap } from "../app/api/v1/bootstrap/route";
@@ -25,6 +26,11 @@ import {
   DELETE as deleteWorkoutTemplate
 } from "../app/api/v1/templates/workouts/[id]/route";
 import { POST as createWorkout, PATCH as updateWorkout } from "../app/api/v1/workout-logs/quick/route";
+import { POST as createWorkoutCheckin } from "../app/api/v1/workout-checkins/route";
+import {
+  PATCH as patchWorkoutCheckin,
+  DELETE as deleteWorkoutCheckin
+} from "../app/api/v1/workout-checkins/[id]/route";
 import { DELETE as deleteWorkout } from "../app/api/v1/workout-logs/[id]/route";
 import { DELETE as deleteBodyMetric } from "../app/api/v1/body-metrics/[id]/route";
 import { repo } from "../src/lib/repository";
@@ -65,6 +71,26 @@ test("POST /v1/auth/guest creates a guest session", async () => {
   const payload = (await response.json()) as { data: { sessionId: string; userId: string } };
   assert.equal(typeof payload.data.sessionId, "string");
   assert.equal(typeof payload.data.userId, "string");
+});
+
+test("GET /v1/auth/session restores session from cookie and returns null without cookie", async () => {
+  const session = await makeSession();
+
+  const missing = await getAuthSession(new Request("http://localhost/api/v1/auth/session"));
+  assert.equal(missing.status, 200);
+  const missingPayload = (await missing.json()) as { data: null };
+  assert.equal(missingPayload.data, null);
+
+  const restored = await getAuthSession(
+    new Request("http://localhost/api/v1/auth/session", {
+      headers: {
+        cookie: `routinemate_session_id=${session.sessionId}`
+      }
+    })
+  );
+  assert.equal(restored.status, 200);
+  const restoredPayload = (await restored.json()) as { data: { sessionId: string } };
+  assert.equal(restoredPayload.data.sessionId, session.sessionId);
 });
 
 test("POST /v1/auth/upgrade/google upgrades session and POST /v1/auth/google/session restores it", async () => {
@@ -604,6 +630,60 @@ test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
     data: { mealCheckins: Array<{ id: string }> };
   };
   assert.equal(dayPayload.data.mealCheckins.length, 0);
+});
+
+test("POST/PATCH/DELETE /v1/workout-checkins works with am/pm slots", async () => {
+  const session = await makeSession();
+
+  const createdResponse = await createWorkoutCheckin(
+    new Request("http://localhost/api/v1/workout-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-01",
+        slot: "am",
+        completed: true
+      })
+    })
+  );
+  assert.equal(createdResponse.status, 201);
+  const created = (await createdResponse.json()) as { data: { id: string; workoutSlot: string } };
+  assert.equal(created.data.workoutSlot, "am");
+
+  const patchedResponse = await patchWorkoutCheckin(
+    new Request(`http://localhost/api/v1/workout-checkins/${created.data.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        slot: "pm",
+        completed: false
+      })
+    }),
+    { params: Promise.resolve({ id: created.data.id }) }
+  );
+  assert.equal(patchedResponse.status, 200);
+
+  const deletedResponse = await deleteWorkoutCheckin(
+    new Request(`http://localhost/api/v1/workout-checkins/${created.data.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }),
+    { params: Promise.resolve({ id: created.data.id }) }
+  );
+  assert.equal(deletedResponse.status, 200);
+
+  const dayResponse = await getCalendarDay(
+    new Request(
+      `http://localhost/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=2026-03-01`
+    )
+  );
+  const dayPayload = (await dayResponse.json()) as {
+    data: { workoutLogs: Array<{ id: string }> };
+  };
+  assert.equal(dayPayload.data.workoutLogs.length, 0);
 });
 
 test("DELETE /v1/workout-logs/:id and /v1/body-metrics/:id soft-delete records", async () => {

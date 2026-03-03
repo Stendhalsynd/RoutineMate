@@ -6,7 +6,7 @@
 
 ### 기존 DB에서 추가/변경해야 할 필드
 - `Meals`: `MealSlot(Select)`, `Completed(Checkbox)`, `TemplateId(Rich text)`, `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
-- `Workouts`: `TemplateId(Rich text)`, `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
+- `Workouts`: `WorkoutSlot(Select: am/pm)`, `Completed(Checkbox)`, `TemplateId(Rich text)`, `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
 - `BodyMetrics`: `IsDeleted(Checkbox)`, `DeletedAt(Date)` 추가
 - `FoodLabel`, `MealType`, `PortionSize`는 하위호환 필드로 유지 가능(필수 아님)
 
@@ -111,6 +111,8 @@ APK 릴리즈(S4-4) 참고:
 | `Id` | `Rich text` | Y | workout log id |
 | `UserId` | `Rich text` | Y | 사용자 식별자 |
 | `Date` | `Date` | Y | 기록 날짜 |
+| `WorkoutSlot` | `Select` | Y | `am` 또는 `pm` |
+| `Completed` | `Checkbox` | Y | 운동 체크인 완료 여부 |
 | `BodyPart` | `Select` | Y | `chest/back/legs/core/shoulders/arms/full_body/cardio` |
 | `Purpose` | `Select` | Y | `muscle_gain/fat_loss/endurance/mobility/recovery` |
 | `Tool` | `Select` | Y | `bodyweight/dumbbell/machine/barbell/kettlebell/mixed` |
@@ -162,6 +164,7 @@ APK 릴리즈(S4-4) 참고:
 - `MealSlot`: `breakfast`, `lunch`, `dinner`, `dinner2`
 
 ## Workouts
+- `WorkoutSlot`: `am`, `pm`
 - `BodyPart`: `chest`, `back`, `legs`, `core`, `shoulders`, `arms`, `full_body`, `cardio`
 - `Purpose`: `muscle_gain`, `fat_loss`, `endurance`, `mobility`, `recovery`
 - `Tool`: `bodyweight`, `dumbbell`, `machine`, `barbell`, `kettlebell`, `mixed`
@@ -171,7 +174,7 @@ APK 릴리즈(S4-4) 참고:
 
 ## 4) 배포 후 확인 체크리스트
 
-1. `게스트 세션 시작` 성공
+1. `Google 로그인` 성공
 2. 목표 저장 성공
 3. 식단 저장 성공
 4. 운동 저장 성공

@@ -6,6 +6,7 @@ export type BodyPart = "chest" | "back" | "legs" | "core" | "shoulders" | "arms"
 export type WorkoutPurpose = "muscle_gain" | "fat_loss" | "endurance" | "mobility" | "recovery";
 export type WorkoutTool = "bodyweight" | "dumbbell" | "machine" | "barbell" | "kettlebell" | "mixed";
 export type WorkoutIntensity = "low" | "medium" | "high";
+export type WorkoutSlot = "am" | "pm";
 
 export type RangeKey = "7d" | "30d" | "90d";
 export type DashboardGranularity = "day" | "week" | "month";
@@ -50,12 +51,22 @@ export interface QuickWorkoutLogInput {
   purpose: WorkoutPurpose;
   tool: WorkoutTool;
   exerciseName: string;
+  workoutSlot?: WorkoutSlot;
+  completed?: boolean;
   templateId?: string;
   sets?: number;
   reps?: number;
   weightKg?: number;
   durationMinutes?: number;
   intensity?: WorkoutIntensity;
+}
+
+export interface WorkoutCheckinInput {
+  sessionId: string;
+  date: string;
+  slot: WorkoutSlot;
+  completed: boolean;
+  templateId?: string;
 }
 
 export interface BodyMetricInput {
@@ -119,11 +130,23 @@ export interface WorkoutLog extends DeleteMeta {
   purpose: WorkoutPurpose;
   tool: WorkoutTool;
   exerciseName: string;
+  workoutSlot?: WorkoutSlot;
+  completed?: boolean;
   sets?: number;
   reps?: number;
   weightKg?: number;
   durationMinutes?: number;
   intensity: WorkoutIntensity;
+  templateId?: string;
+  createdAt: string;
+}
+
+export interface WorkoutCheckin extends DeleteMeta {
+  id: string;
+  userId: string;
+  date: string;
+  slot: WorkoutSlot;
+  completed: boolean;
   templateId?: string;
   createdAt: string;
 }

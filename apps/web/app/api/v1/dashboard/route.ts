@@ -5,6 +5,15 @@ import { repo } from "@/lib/repository";
 import { resolveSessionId } from "@/lib/session-cookie";
 import { mealSlotToMealType, rangeToDays, type MealLog } from "@routinemate/domain";
 
+const DASHBOARD_CACHE_TTL_MS = 60_000;
+const dashboardCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    summary: ReturnType<typeof aggregateDashboard>;
+  }
+>();
+
 function mealCheckinToMealLog(
   checkin: Awaited<ReturnType<typeof repo.listMealCheckinsByUser>>[number]
 ): MealLog | null {
@@ -36,6 +45,7 @@ function buildRangeWindow(range: "7d" | "30d" | "90d"): { from: string; to: stri
 
 export async function GET(request: Request) {
   try {
+    const startedAt = Date.now();
     const params = new URL(request.url).searchParams;
     const sessionId = resolveSessionId(request, params.get("sessionId")) ?? "";
     const parsed = dashboardQuerySchema.safeParse({
@@ -53,6 +63,13 @@ export async function GET(request: Request) {
     }
 
     const window = buildRangeWindow(parsed.data.range);
+    const cacheKey = `${session.userId}:${parsed.data.range}:${window.to}`;
+    const cached = dashboardCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      console.info(`[dashboard] cache-hit range=${parsed.data.range} elapsedMs=${Date.now() - startedAt}`);
+      return ok(cached.summary, 200);
+    }
+
     const mealLogs = await repo.listMealsByUserInRange(session.userId, window.from, window.to);
     const checkins = await repo.listMealCheckinsByUserInRange(session.userId, window.from, window.to);
     const mergedMeals = new Map<string, MealLog>();
@@ -73,6 +90,12 @@ export async function GET(request: Request) {
       bodyMetrics: await repo.listBodyMetricsByUserInRange(session.userId, window.from, window.to),
       goals: await repo.listGoalsByUser(session.userId)
     });
+
+    dashboardCache.set(cacheKey, {
+      summary,
+      expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS
+    });
+    console.info(`[dashboard] cache-miss range=${parsed.data.range} elapsedMs=${Date.now() - startedAt}`);
 
     return ok(summary, 200);
   } catch (error) {

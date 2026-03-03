@@ -144,6 +144,7 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
 
   const meals = input.meals.filter((item) => inWindow(item.date, startMs, endMs));
   const workouts = input.workouts.filter((item) => inWindow(item.date, startMs, endMs));
+  const completedWorkouts = workouts.filter((item) => item.completed !== false);
   const bodyMetrics = input.bodyMetrics.filter((item) => inWindow(item.date, startMs, endMs));
 
   const mealsByDate = new Map<string, MealLog[]>();
@@ -157,7 +158,7 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
     mealsByDate.set(key, existing);
   }
 
-  for (const row of workouts) {
+  for (const row of completedWorkouts) {
     const key = toDateKey(row.date);
     const existing = workoutsByDate.get(key) ?? [];
     existing.push(row);
@@ -185,7 +186,7 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
   const granularity = rangeToGranularity(input.range);
   const buckets = buildBuckets(daily, granularity);
   const goals = input.goals.map((goal) =>
-    calculateGoalProgress(goal, workouts, latest, rangeDays, endDateKey)
+    calculateGoalProgress(goal, completedWorkouts, latest, rangeDays, endDateKey)
   );
   const daysWithAnyLog = daily.filter(
     (item) => item.mealLogCount > 0 || item.workoutLogCount > 0 || item.hasBodyMetric
@@ -196,7 +197,7 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
     granularity,
     adherenceRate: calculateAdherenceRate(daily),
     totalMeals: meals.length,
-    totalWorkouts: workouts.length,
+    totalWorkouts: completedWorkouts.length,
     latestWeightKg: latest?.weightKg ?? null,
     latestBodyFatPct: latest?.bodyFatPct ?? null,
     daily,
@@ -210,7 +211,7 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
       windowEnd: endDateKey,
       coveredDays: daily.length,
       mealCount: meals.length,
-      workoutCount: workouts.length,
+      workoutCount: completedWorkouts.length,
       bodyMetricCount: bodyMetrics.length,
       daysWithAnyLog
     }

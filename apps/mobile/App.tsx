@@ -1,6 +1,12 @@
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
-import { GoogleSignin, isErrorWithCode, isSuccessResponse, statusCodes } from "@react-native-google-signin/google-signin";
+import {
+  GoogleSignin,
+  isErrorWithCode,
+  isNoSavedCredentialFoundResponse,
+  isSuccessResponse,
+  statusCodes
+} from "@react-native-google-signin/google-signin";
 import {
   Pressable,
   SafeAreaView,
@@ -74,6 +80,7 @@ type BodyPart = "chest" | "back" | "legs" | "core" | "shoulders" | "arms" | "ful
 type WorkoutPurpose = "muscle_gain" | "fat_loss" | "endurance" | "mobility" | "recovery";
 type WorkoutTool = "bodyweight" | "dumbbell" | "machine" | "barbell" | "kettlebell" | "mixed";
 type WorkoutIntensity = "low" | "medium" | "high";
+type WorkoutSlot = "am" | "pm";
 
 type WorkoutTemplate = {
   id: string;
@@ -103,6 +110,8 @@ type WorkoutLog = {
   exerciseName: string;
   durationMinutes?: number;
   intensity?: WorkoutIntensity;
+  workoutSlot?: WorkoutSlot;
+  completed?: boolean;
   templateId?: string;
   isDeleted?: boolean;
 };
@@ -122,17 +131,6 @@ type DaySnapshot = {
   bodyMetrics: BodyMetric[];
 };
 
-type WorkoutLogInput = {
-  date: string;
-  bodyPart: BodyPart;
-  purpose: WorkoutPurpose;
-  tool: WorkoutTool;
-  exerciseName: string;
-  intensity: WorkoutIntensity;
-  durationMinutes: string;
-  templateId?: string;
-};
-
 type MessageType = "error" | "success" | "info";
 type Message = {
   type: MessageType;
@@ -147,6 +145,11 @@ const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "lunch", label: "점심" },
   { value: "dinner", label: "저녁" },
   { value: "dinner2", label: "저녁2" }
+];
+
+const workoutSlots: Array<{ value: WorkoutSlot; label: string }> = [
+  { value: "am", label: "오전" },
+  { value: "pm", label: "오후" }
 ];
 
 const bodyPartOptions: Array<{ value: BodyPart; label: string }> = [
@@ -177,12 +180,6 @@ const toolOptions: Array<{ value: WorkoutTool; label: string }> = [
   { value: "mixed", label: "혼합" }
 ];
 
-const intensityOptions: Array<{ value: WorkoutIntensity; label: string }> = [
-  { value: "low", label: "낮음" },
-  { value: "medium", label: "보통" },
-  { value: "high", label: "높음" }
-];
-
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -195,6 +192,7 @@ Notifications.setNotificationHandler({
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -207,6 +205,24 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(payload?.error?.message ?? "요청에 실패했습니다.");
   }
   return payload?.data as T;
+}
+
+function defaultWorkoutBySlot(slot: WorkoutSlot): {
+  bodyPart: BodyPart;
+  purpose: WorkoutPurpose;
+  tool: WorkoutTool;
+  exerciseName: string;
+  durationMinutes: number;
+  intensity: NonNullable<WorkoutLog["intensity"]>;
+} {
+  return {
+    bodyPart: "full_body",
+    purpose: "fat_loss",
+    tool: "bodyweight",
+    exerciseName: slot === "am" ? "오전 운동 체크" : "오후 운동 체크",
+    durationMinutes: slot === "am" ? 20 : 30,
+    intensity: "medium"
+  };
 }
 
 function todayYmd(): string {
@@ -339,17 +355,6 @@ export default function App(): React.JSX.Element {
     defaultDuration: "30"
   });
 
-  const [workoutForm, setWorkoutForm] = React.useState<WorkoutLogInput>({
-    date: today,
-    bodyPart: "full_body",
-    purpose: "fat_loss",
-    tool: "bodyweight",
-    exerciseName: "",
-    intensity: "medium",
-    durationMinutes: "30",
-    templateId: ""
-  });
-
   const [weightForm, setWeightForm] = React.useState("");
   const [bodyFatForm, setBodyFatForm] = React.useState("");
   const [bodyMetricDate, setBodyMetricDate] = React.useState(today);
@@ -385,11 +390,24 @@ export default function App(): React.JSX.Element {
 
   const activeMealTemplates = React.useMemo(() => mealTemplates.filter((item) => item.isActive), [mealTemplates]);
   const activeWorkoutTemplates = React.useMemo(() => workoutTemplates.filter((item) => item.isActive), [workoutTemplates]);
+  const workoutCheckinBySlot = React.useMemo(() => {
+    const map = new Map<WorkoutSlot, WorkoutLog>();
+    for (const item of day.workoutLogs) {
+      if (item.isDeleted || !item.workoutSlot) {
+        continue;
+      }
+      const existing = map.get(item.workoutSlot);
+      if (!existing || item.date >= existing.date) {
+        map.set(item.workoutSlot, item);
+      }
+    }
+    return map;
+  }, [day.workoutLogs]);
   const statusBarOffset = React.useMemo(() => {
     if (Platform.OS === "android") {
-      return RNStatusBar.currentHeight ?? 0;
+      return (RNStatusBar.currentHeight ?? 0) + spacing.sm;
     }
-    return 20;
+    return 24;
   }, []);
 
   const messageTextStyle = React.useMemo(() => {
@@ -416,17 +434,12 @@ export default function App(): React.JSX.Element {
 
   const sessionInfoText = React.useMemo(() => {
     if (!session) {
-      return "세션 없음";
+      return "Google 로그인 필요";
+    }
+    if (session.authProvider === "google") {
+      return `Google 연결됨 (${session.email ?? "이메일 없음"})`;
     }
     return `세션: ${session.sessionId.slice(0, 10)}...`;
-  }, [session]);
-
-  const confirmSession = React.useCallback(() => {
-    if (!session) {
-      setMessage({ type: "info", text: "세션이 없습니다. 설정에서 게스트 세션을 시작해 주세요." });
-      return;
-    }
-    setMessage({ type: "info", text: `세션 ID: ${session.sessionId}` });
   }, [session]);
 
   const refreshCoreSessionData = React.useCallback(async () => {
@@ -517,6 +530,57 @@ export default function App(): React.JSX.Element {
   );
 
   React.useEffect(() => {
+    let mounted = true;
+    const restoreSession = async (): Promise<void> => {
+      try {
+        const restored = await apiFetch<Session | null>("/api/v1/auth/session");
+        if (!mounted) {
+          return;
+        }
+        if (restored?.sessionId) {
+          setSession(restored);
+          return;
+        }
+
+        if (!GOOGLE_WEB_CLIENT_ID) {
+          return;
+        }
+
+        const silentResult = await GoogleSignin.signInSilently();
+        if (!mounted || isNoSavedCredentialFoundResponse(silentResult) || !isSuccessResponse(silentResult)) {
+          return;
+        }
+        const idToken = silentResult.data.idToken;
+        if (!idToken) {
+          return;
+        }
+
+        const googleSession = await apiFetch<Session>("/api/v1/auth/google/session", {
+          method: "POST",
+          body: JSON.stringify({
+            idToken,
+            platform: "android",
+            mode: "native_sdk"
+          })
+        });
+        if (mounted) {
+          setSession(googleSession);
+          setMessage({ type: "success", text: "Google 세션이 복원되었습니다." });
+        }
+      } catch {
+        if (mounted) {
+          setMessage({ type: "info", text: "Google 로그인 후 데이터 동기화를 시작할 수 있습니다." });
+        }
+      }
+    };
+
+    void restoreSession();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (!session) {
       return;
     }
@@ -532,34 +596,13 @@ export default function App(): React.JSX.Element {
   }, [loadDayData, selectedDate, tab]);
 
   React.useEffect(() => {
-    setWorkoutForm((prev) => ({ ...prev, date: selectedDate }));
     setBodyMetricDate(selectedDate);
   }, [selectedDate]);
-
-  const startGuest = React.useCallback(async () => {
-    try {
-      const next = await apiFetch<Session>("/api/v1/auth/guest", {
-        method: "POST",
-        body: JSON.stringify({})
-      });
-      setSession(next);
-      setMessage({ type: "success", text: "게스트 세션을 시작했습니다." });
-      setSelectedDate(today);
-      setWorkoutForm((prev) => ({ ...prev, date: today }));
-      setBodyMetricDate(today);
-      setGoalDraftDirty(false);
-      void refreshCoreSessionData();
-      void loadTemplateCatalog();
-      void loadDayData(today);
-    } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "게스트 시작 실패" });
-    }
-  }, [loadDayData, refreshCoreSessionData, loadTemplateCatalog, today]);
 
   const upsertMealCheckin = React.useCallback(
     async (slot: MealSlot, completed: boolean, templateId?: string) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
 
@@ -618,7 +661,7 @@ export default function App(): React.JSX.Element {
   const deleteMealCheckin = React.useCallback(
     async (slot: MealSlot) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
       const existing = checkinBySlot.get(slot);
@@ -647,71 +690,110 @@ export default function App(): React.JSX.Element {
     [checkinBySlot, day, refreshWorkspaceAfterMutation, session, selectedDate]
   );
 
-  const saveWorkoutLog = React.useCallback(
-    async (source?: WorkoutTemplate) => {
+  const upsertWorkoutCheckin = React.useCallback(
+    async (slot: WorkoutSlot, completed: boolean, templateId?: string) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
 
-      const template = source;
+      const existing = workoutCheckinBySlot.get(slot);
+      const selectedTemplate = templateId ? activeWorkoutTemplates.find((item) => item.id === templateId) : undefined;
+      const defaults = defaultWorkoutBySlot(slot);
       const payload = {
         sessionId: session.sessionId,
-        date: template ? selectedDate : workoutForm.date,
-        bodyPart: template ? template.bodyPart : workoutForm.bodyPart,
-        purpose: template ? template.purpose : workoutForm.purpose,
-        tool: template ? template.tool : workoutForm.tool,
-        exerciseName: template ? template.label : workoutForm.exerciseName || "기본 운동",
-        intensity: template ? "medium" : workoutForm.intensity,
-        durationMinutes: template
-          ? template.defaultDuration ?? 30
-          : parseNumber(workoutForm.durationMinutes) ?? parseNumber("30") ?? 30,
-        ...(template && template.id ? { templateId: template.id } : {})
+        date: selectedDate,
+        slot,
+        completed,
+        ...(templateId ? { templateId } : {})
       };
 
       const optimistic: WorkoutLog = {
-        id: `tmp-workout-${Date.now()}`,
-        date: payload.date,
-        bodyPart: payload.bodyPart,
-        purpose: payload.purpose,
-        tool: payload.tool,
-        exerciseName: payload.exerciseName,
-        intensity: payload.intensity,
-        durationMinutes: payload.durationMinutes,
-        ...(payload.templateId ? { templateId: payload.templateId } : {})
+        id: existing?.id ?? `tmp-workout-${Date.now()}`,
+        date: selectedDate,
+        bodyPart: selectedTemplate?.bodyPart ?? existing?.bodyPart ?? defaults.bodyPart,
+        purpose: selectedTemplate?.purpose ?? existing?.purpose ?? defaults.purpose,
+        tool: selectedTemplate?.tool ?? existing?.tool ?? defaults.tool,
+        exerciseName: selectedTemplate?.label ?? existing?.exerciseName ?? defaults.exerciseName,
+        intensity: existing?.intensity ?? defaults.intensity,
+        workoutSlot: slot,
+        completed,
+        ...((selectedTemplate?.defaultDuration ?? existing?.durationMinutes ?? defaults.durationMinutes) !== undefined
+          ? { durationMinutes: selectedTemplate?.defaultDuration ?? existing?.durationMinutes ?? defaults.durationMinutes }
+          : {}),
+        ...(templateId ? { templateId } : {})
       };
 
       const previousDay = day;
-      setDay((current) => ({ ...current, workoutLogs: [optimistic, ...current.workoutLogs] }));
+      setDay((current) => ({
+        ...current,
+        workoutLogs: existing
+          ? current.workoutLogs.map((item) => (item.id === existing.id ? { ...item, ...optimistic } : item))
+          : [optimistic, ...current.workoutLogs]
+      }));
 
       try {
-        const saved = await apiFetch<WorkoutLog>("/api/v1/workout-logs/quick", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
+        const saved = await (existing
+          ? apiFetch<WorkoutLog>(`/api/v1/workout-checkins/${existing.id}`, {
+              method: "PATCH",
+              body: JSON.stringify(payload)
+            })
+          : apiFetch<WorkoutLog>("/api/v1/workout-checkins", {
+              method: "POST",
+              body: JSON.stringify(payload)
+            }));
         if (saved?.id) {
           setDay((current) => ({
             ...current,
-            workoutLogs: [saved, ...current.workoutLogs.filter((item) => !item.id.startsWith("tmp-workout-") && item.id !== saved.id)]
+            workoutLogs: [saved, ...current.workoutLogs.filter((item) => item.id !== optimistic.id && item.id !== saved.id)]
           }));
         }
-        if (!template) {
-          setWorkoutForm((prev) => ({ ...prev, exerciseName: "" }));
-        }
-        setMessage({ type: "success", text: "운동을 저장했습니다." });
+        setMessage({
+          type: "success",
+          text: `${workoutSlots.find((item) => item.value === slot)?.label ?? "운동"} 체크인을 저장했습니다.`
+        });
       } catch (error) {
         setDay(previousDay);
         setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 저장 실패" });
       }
       void refreshWorkspaceAfterMutation();
     },
-    [day, refreshWorkspaceAfterMutation, selectedDate, session, workoutForm]
+    [activeWorkoutTemplates, day, refreshWorkspaceAfterMutation, selectedDate, session, workoutCheckinBySlot]
+  );
+
+  const deleteWorkoutCheckin = React.useCallback(
+    async (slot: WorkoutSlot) => {
+      if (!session) {
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+        return;
+      }
+
+      const existing = workoutCheckinBySlot.get(slot);
+      if (!existing) {
+        return;
+      }
+
+      const previousDay = day;
+      setDay((current) => ({ ...current, workoutLogs: current.workoutLogs.filter((item) => item.id !== existing.id) }));
+      try {
+        await apiFetch<unknown>(`/api/v1/workout-checkins/${existing.id}`, {
+          method: "DELETE",
+          body: JSON.stringify({ sessionId: session.sessionId })
+        });
+        setMessage({ type: "info", text: "운동 체크인을 삭제했습니다." });
+      } catch (error) {
+        setDay(previousDay);
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 삭제 실패" });
+      }
+      void refreshWorkspaceAfterMutation();
+    },
+    [day, refreshWorkspaceAfterMutation, session, workoutCheckinBySlot]
   );
 
   const deleteWorkoutLog = React.useCallback(
     async (logId: string) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
 
@@ -729,12 +811,12 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [day, refreshWorkspaceAfterMutation, session, selectedDate]
+    [day, refreshWorkspaceAfterMutation, session]
   );
 
   const saveBodyMetric = React.useCallback(async () => {
     if (!session) {
-      setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -780,7 +862,7 @@ export default function App(): React.JSX.Element {
   const deleteBodyMetric = React.useCallback(
     async (metricId: string) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
 
@@ -807,7 +889,7 @@ export default function App(): React.JSX.Element {
 
   const saveGoal = React.useCallback(async () => {
     if (!session) {
-      setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -841,7 +923,7 @@ export default function App(): React.JSX.Element {
 
   const createMealTemplate = React.useCallback(async () => {
     if (!session) {
-      setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
     const trimmed = mealTemplateLabel.trim();
@@ -884,7 +966,7 @@ export default function App(): React.JSX.Element {
   const updateMealTemplate = React.useCallback(
     async (id: string, updates: Partial<Pick<MealTemplate, "label" | "mealSlot" | "isActive">>) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
       const previous = mealTemplates;
@@ -942,7 +1024,7 @@ export default function App(): React.JSX.Element {
 
   const createWorkoutTemplate = React.useCallback(async () => {
     if (!session) {
-      setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
     const trimmed = workoutTemplateLabel.trim();
@@ -997,7 +1079,7 @@ export default function App(): React.JSX.Element {
       >
     ) => {
       if (!session) {
-        setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
         return;
       }
 
@@ -1091,7 +1173,7 @@ export default function App(): React.JSX.Element {
 
   const saveReminder = React.useCallback(async () => {
     if (!session) {
-      setMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -1147,17 +1229,18 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "Google idToken 획득에 실패했습니다." });
         return;
       }
-      const payload = await apiFetch<Session>(session ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
+      const shouldUpgradeGuest = Boolean(session) && session?.isGuest === true;
+      const payload = await apiFetch<Session>(shouldUpgradeGuest ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
         method: "POST",
         body: JSON.stringify({
-          ...(session ? { sessionId: session.sessionId } : {}),
+          ...(shouldUpgradeGuest ? { sessionId: session.sessionId } : {}),
           idToken,
           platform: "android",
           mode: "native_sdk"
         })
       });
       setSession(payload);
-      setMessage({ type: "success", text: "Google 계정 전환이 완료되었습니다." });
+      setMessage({ type: "success", text: "Google 로그인이 완료되었습니다." });
       void refreshCoreSessionData();
       void loadTemplateCatalog();
     } catch (error) {
@@ -1175,7 +1258,7 @@ export default function App(): React.JSX.Element {
           return;
         }
       }
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "Google 전환 실패" });
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Google 로그인 실패" });
     }
   }, [loadTemplateCatalog, refreshCoreSessionData, session]);
 
@@ -1187,25 +1270,16 @@ export default function App(): React.JSX.Element {
           <Text style={styles.brand}>RoutineMate</Text>
           <Text style={styles.topBarSub}>{sessionInfoText}</Text>
         </View>
-        {tab === "settings" ? (
-          <View style={styles.topActions}>
-            <Pressable style={styles.primaryButton} onPress={startGuest}>
-              <Text style={styles.primaryButtonText}>게스트 시작</Text>
-            </Pressable>
-            <Pressable style={styles.secondaryButton} onPress={confirmSession}>
-              <Text style={styles.secondaryButtonText}>세션 확인</Text>
-            </Pressable>
+        <View style={styles.topActions}>
+          <Pressable style={styles.topPrimaryButton} onPress={upgradeGoogleMobile}>
+            <Text style={styles.topPrimaryButtonText}>
+              {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
+            </Text>
+          </Pressable>
+          <View style={styles.sessionBadge}>
+            <Text style={styles.sessionBadgeText}>{isSyncing ? "동기화 중..." : "동기화 완료"}</Text>
           </View>
-        ) : (
-          <View style={styles.topActions}>
-            <View style={styles.sessionBadge}>
-              <Text style={styles.sessionBadgeText}>{session ? "세션 연결됨" : "세션 미연결"}</Text>
-            </View>
-            <View style={styles.sessionBadge}>
-              <Text style={styles.sessionBadgeText}>{isSyncing ? "동기화 중..." : "동기화 완료"}</Text>
-            </View>
-          </View>
-        )}
+        </View>
       </View>
 
       <View style={styles.tabRow}>
@@ -1226,22 +1300,49 @@ export default function App(): React.JSX.Element {
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={messageTextStyle}>{message?.text ?? ""}</Text>
-        <Text style={styles.hint}>상태: {session ? "세션 연결됨" : "세션 없음"}</Text>
+        <Text style={styles.hint}>
+          상태: {session?.authProvider === "google" ? `Google 연결됨 (${session.email ?? "이메일 없음"})` : "Google 로그인 필요"}
+        </Text>
 
         {tab === "dashboard" ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>대시보드</Text>
-            <View style={styles.tabRow}>
-              <Pressable style={styles.chip} onPress={() => setRange("7d")}>
-                <Text style={styles.chipText}>Day</Text>
+            <View style={styles.dashboardRangeRow}>
+              <Pressable
+                style={[styles.dashboardRangeChip, range === "7d" && styles.dashboardRangeChipActive]}
+                onPress={() => setRange("7d")}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: range === "7d" }}
+              >
+                <Text style={[styles.dashboardRangeChipText, range === "7d" && styles.dashboardRangeChipTextActive]}>Day</Text>
               </Pressable>
-              <Pressable style={styles.chip} onPress={() => setRange("30d")}>
-                <Text style={styles.chipText}>Week</Text>
+              <Pressable
+                style={[styles.dashboardRangeChip, range === "30d" && styles.dashboardRangeChipActive]}
+                onPress={() => setRange("30d")}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: range === "30d" }}
+              >
+                <Text style={[styles.dashboardRangeChipText, range === "30d" && styles.dashboardRangeChipTextActive]}>
+                  Week
+                </Text>
               </Pressable>
-              <Pressable style={styles.chip} onPress={() => setRange("90d")}>
-                <Text style={styles.chipText}>Month</Text>
+              <Pressable
+                style={[styles.dashboardRangeChip, range === "90d" && styles.dashboardRangeChipActive]}
+                onPress={() => setRange("90d")}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: range === "90d" }}
+              >
+                <Text style={[styles.dashboardRangeChipText, range === "90d" && styles.dashboardRangeChipTextActive]}>
+                  Month
+                </Text>
               </Pressable>
             </View>
+            <Text style={styles.hint}>
+              현재 기준: {range === "7d" ? "Day" : range === "30d" ? "Week" : "Month"} {isSyncing ? "(동기화 중)" : ""}
+            </Text>
             <Text style={styles.value}>체크인율 {Math.round(dashboard?.adherenceRate ?? 0)}%</Text>
             <Text style={styles.hint}>식단 {dashboard?.totalMeals ?? 0}건 / 운동 {dashboard?.totalWorkouts ?? 0}건</Text>
             {goal ? <Text style={styles.hint}>현재 목표: 주 {goal.weeklyRoutineTarget}회</Text> : <Text style={styles.hint}>현재 목표: 미설정</Text>}
@@ -1315,72 +1416,55 @@ export default function App(): React.JSX.Element {
               );
             })}
 
-            <Text style={styles.sectionTitle}>운동 Quick Log</Text>
-            {activeWorkoutTemplates.length > 0 ? (
-              <>
-                <Text style={styles.hint}>템플릿 빠른 저장</Text>
-                <View style={styles.chipRowWrap}>
-                  {activeWorkoutTemplates.map((template) => (
-                    <Pressable key={template.id} style={styles.chip} onPress={() => void saveWorkoutLog(template)}>
-                      <Text style={styles.chipText}>{template.label}</Text>
+            <Text style={styles.sectionTitle}>운동 체크인</Text>
+            <Text style={styles.hint}>오전/오후 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</Text>
+            {workoutSlots.map((slot) => {
+              const current = workoutCheckinBySlot.get(slot.value);
+              return (
+                <View style={styles.subCard} key={slot.value}>
+                  <Text style={styles.sectionSubTitle}>{slot.label}</Text>
+                  <View style={styles.row}>
+                    <Pressable
+                      style={[styles.chip, current?.completed === true && styles.chipActive]}
+                      onPress={() => {
+                        void upsertWorkoutCheckin(slot.value, true, current?.templateId);
+                      }}
+                    >
+                      <Text style={styles.chipText}>함</Text>
                     </Pressable>
-                  ))}
+                    <Pressable
+                      style={[styles.chip, current?.completed === false && styles.chipActive]}
+                      onPress={() => {
+                        void upsertWorkoutCheckin(slot.value, false, current?.templateId);
+                      }}
+                    >
+                      <Text style={styles.chipText}>안함</Text>
+                    </Pressable>
+                    {current ? (
+                      <Pressable style={styles.chip} onPress={() => void deleteWorkoutCheckin(slot.value)}>
+                        <Text style={styles.chipText}>삭제</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                  <View style={styles.chipRowWrap}>
+                    {activeWorkoutTemplates.length > 0 ? (
+                      activeWorkoutTemplates.map((template) => (
+                        <Pressable
+                          key={template.id}
+                          style={[styles.chip, current?.templateId === template.id && styles.chipActive]}
+                          onPress={() => void upsertWorkoutCheckin(slot.value, true, template.id)}
+                        >
+                          <Text style={styles.chipText}>{template.label}</Text>
+                        </Pressable>
+                      ))
+                    ) : (
+                      <Text style={styles.hint}>설정에서 운동 템플릿을 등록하면 1탭 저장이 가능합니다.</Text>
+                    )}
+                  </View>
+                  <View style={styles.actionGap} />
                 </View>
-              </>
-            ) : (
-              <Text style={styles.hint}>설정에서 운동 템플릿을 등록하면 1탭 저장이 가능합니다.</Text>
-            )}
-
-            <View style={styles.form}>
-            <FieldInput
-              label="날짜"
-              value={workoutForm.date}
-              onChangeText={(date) => setWorkoutForm((prev) => ({ ...prev, date }))}
-              placeholder="YYYY-MM-DD"
-            />
-            <SelectRow
-              label="부위"
-              options={bodyPartOptions.map((item) => ({ value: item.value, label: item.label }))}
-              selected={workoutForm.bodyPart}
-              onSelect={(value) => setWorkoutForm((prev) => ({ ...prev, bodyPart: value as BodyPart, templateId: "" }))}
-            />
-            <SelectRow
-              label="목적"
-              options={purposeOptions.map((item) => ({ value: item.value, label: item.label }))}
-              selected={workoutForm.purpose}
-              onSelect={(value) => setWorkoutForm((prev) => ({ ...prev, purpose: value as WorkoutPurpose, templateId: "" }))}
-            />
-            <SelectRow
-              label="도구"
-              options={toolOptions.map((item) => ({ value: item.value, label: item.label }))}
-              selected={workoutForm.tool}
-              onSelect={(value) => setWorkoutForm((prev) => ({ ...prev, tool: value as WorkoutTool, templateId: "" }))}
-            />
-            <FieldInput
-              label="운동명"
-              value={workoutForm.exerciseName}
-              onChangeText={(exerciseName) => setWorkoutForm((prev) => ({ ...prev, exerciseName, templateId: "" }))}
-              placeholder="운동명 입력"
-            />
-            <SelectRow
-              label="강도"
-              options={intensityOptions.map((item) => ({ value: item.value, label: item.label }))}
-              selected={workoutForm.intensity}
-              onSelect={(value) => setWorkoutForm((prev) => ({ ...prev, intensity: value as WorkoutIntensity, templateId: "" }))}
-            />
-            <FieldInput
-              label="시간(분)"
-              value={workoutForm.durationMinutes}
-              onChangeText={(durationMinutes) => setWorkoutForm((prev) => ({ ...prev, durationMinutes, templateId: "" }))}
-              placeholder="30"
-              keyboardType="numeric"
-            />
-
-            <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={() => void saveWorkoutLog()}>
-              <Text style={styles.primaryButtonText}>운동 저장</Text>
-            </Pressable>
-
-            </View>
+              );
+            })}
 
             <Text style={styles.sectionTitle}>체중/체지방 기록</Text>
             <FieldInput
@@ -1417,9 +1501,15 @@ export default function App(): React.JSX.Element {
                   .map((item) => (
                     <View key={item.id} style={styles.recordListItem}>
                       <View style={styles.recordListTextBlock}>
-                        <Text style={styles.recordListTitle}>{item.exerciseName}</Text>
+                        <Text style={styles.recordListTitle}>
+                          {item.workoutSlot
+                            ? `${workoutSlots.find((slot) => slot.value === item.workoutSlot)?.label ?? item.workoutSlot} ${
+                                item.completed === false ? "안함" : "함"
+                              }`
+                            : item.exerciseName}
+                        </Text>
                         <Text style={styles.hint}>
-                          {item.bodyPart} / {item.purpose} / {item.tool} / {item.durationMinutes ?? 30}분 / {item.intensity}
+                          {item.exerciseName} / {item.bodyPart} / {item.purpose} / {item.tool} / {item.durationMinutes ?? 30}분
                         </Text>
                       </View>
                       <Pressable style={styles.secondaryButton} onPress={() => void deleteWorkoutLog(item.id)}>
@@ -1777,9 +1867,16 @@ export default function App(): React.JSX.Element {
               <Text style={styles.primaryButtonText}>리마인더 저장</Text>
             </Pressable>
 
-            <Text style={styles.sectionTitle}>계정</Text>
+            <Text style={styles.sectionTitle}>Google 로그인</Text>
+            <Text style={styles.hint}>
+              {session?.authProvider === "google"
+                ? `현재 상태: Google 연결됨 (${session.email ?? "이메일 없음"})`
+                : "현재 상태: Google 로그인 필요"}
+            </Text>
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={upgradeGoogleMobile}>
-              <Text style={styles.primaryButtonText}>Google로 계정 전환</Text>
+              <Text style={styles.primaryButtonText}>
+                {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
+              </Text>
             </Pressable>
           </View>
         ) : null}
@@ -1820,7 +1917,22 @@ const styles = StyleSheet.create({
   topActions: {
     flexDirection: "row",
     gap: spacing.sm,
-    alignItems: "center"
+    alignItems: "center",
+    flexWrap: "wrap",
+    justifyContent: "flex-end"
+  },
+  topPrimaryButton: {
+    backgroundColor: colors.brand,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  topPrimaryButtonText: {
+    color: colors.brandOn,
+    fontSize: 12,
+    fontWeight: "700"
   },
   sessionBadge: {
     borderRadius: 999,
@@ -1845,6 +1957,32 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm
+  },
+  dashboardRangeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.xs
+  },
+  dashboardRangeChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#fff"
+  },
+  dashboardRangeChipActive: {
+    backgroundColor: colors.brand,
+    borderColor: colors.brand
+  },
+  dashboardRangeChipText: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: "700"
+  },
+  dashboardRangeChipTextActive: {
+    color: colors.brandOn
   },
   tabButton: {
     paddingVertical: 10,

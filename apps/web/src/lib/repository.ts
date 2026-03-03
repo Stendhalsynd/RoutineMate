@@ -17,6 +17,7 @@ import type {
   QuickMealLogInput,
   QuickWorkoutLogInput,
   Session,
+  WorkoutSlot,
   WorkoutLog
 } from "@routinemate/domain";
 import {
@@ -405,6 +406,14 @@ function mapWorkout(page: NotionPage): WorkoutLog | null {
   if (templateId) {
     workout.templateId = templateId;
   }
+  const workoutSlot = getSelect(page, "WorkoutSlot");
+  if (workoutSlot === "am" || workoutSlot === "pm") {
+    workout.workoutSlot = workoutSlot as WorkoutSlot;
+  }
+  const completed = getCheckbox(page, "Completed");
+  if (completed !== undefined) {
+    workout.completed = completed;
+  }
   const sets = getNumber(page, "Sets");
   if (sets !== undefined) {
     workout.sets = sets;
@@ -583,7 +592,11 @@ function getReminderSettingsDbId(): string {
 
 function isUnknownNotionPropertyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("is not a property that exists") || message.includes("Could not find database property");
+  return (
+    message.includes("is not a property that exists") ||
+    message.includes("Could not find database property") ||
+    message.includes("Could not find property with name or id")
+  );
 }
 
 async function createSessionPageWithOptionalFields(
@@ -671,6 +684,8 @@ async function ensureNotionSchemaValidated(): Promise<void> {
       "Id",
       "UserId",
       "Date",
+      "WorkoutSlot",
+      "Completed",
       "BodyPart",
       "Purpose",
       "Tool",
@@ -933,13 +948,34 @@ export const repo = {
 
     await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
-    const result = await queryDatabasePages(databases.sessionsDbId, {
-      filter: {
-        property: "ProviderSubject",
-        rich_text: { equals: profile.sub }
+    let existingPage: NotionPage | null = null;
+    try {
+      const result = await queryDatabasePages(databases.sessionsDbId, {
+        filter: {
+          property: "ProviderSubject",
+          rich_text: { equals: profile.sub }
+        }
+      });
+      existingPage = result.map(toPage).find((page) => getSelect(page, "AuthProvider") === "google") ?? null;
+    } catch (error) {
+      if (!isUnknownNotionPropertyError(error)) {
+        throw error;
       }
-    });
-    const existingPage = result.map(toPage).find((page) => getSelect(page, "AuthProvider") === "google") ?? null;
+      const fallback = await queryDatabasePages(databases.sessionsDbId, {
+        filter: {
+          property: "Email",
+          email: { equals: profile.email }
+        }
+      });
+      existingPage =
+        fallback
+          .map(toPage)
+          .find((page) => {
+            const provider = getSelect(page, "AuthProvider");
+            return provider === "google" || provider === undefined;
+          }) ?? null;
+    }
+
     if (existingPage) {
       await updateSessionPageWithOptionalFields(
         existingPage.id,
@@ -947,6 +983,7 @@ export const repo = {
           Email: emailProperty(profile.email)
         },
         {
+          ProviderSubject: richTextProperty(profile.sub),
           ...(profile.picture ? { AvatarUrl: urlProperty(profile.picture) } : {})
         }
       );
@@ -1061,6 +1098,8 @@ export const repo = {
         tool: input.tool,
         exerciseName: input.exerciseName,
         intensity: input.intensity ?? "medium",
+        ...(input.workoutSlot ? { workoutSlot: input.workoutSlot } : {}),
+        ...(input.completed !== undefined ? { completed: input.completed } : {}),
         ...(input.templateId ? { templateId: input.templateId } : {}),
         createdAt: nowIso()
       };
@@ -1091,6 +1130,8 @@ export const repo = {
       tool: input.tool,
       exerciseName: input.exerciseName,
       intensity: input.intensity ?? "medium",
+      ...(input.workoutSlot ? { workoutSlot: input.workoutSlot } : {}),
+      ...(input.completed !== undefined ? { completed: input.completed } : {}),
       ...(input.templateId ? { templateId: input.templateId } : {}),
       createdAt: nowIso()
     };
@@ -1112,6 +1153,8 @@ export const repo = {
       Id: richTextProperty(log.id),
       UserId: richTextProperty(log.userId),
       Date: dateProperty(log.date),
+      ...(log.workoutSlot ? { WorkoutSlot: selectProperty(log.workoutSlot) } : {}),
+      ...(log.completed !== undefined ? { Completed: checkboxProperty(log.completed) } : {}),
       BodyPart: selectProperty(log.bodyPart),
       Purpose: selectProperty(log.purpose),
       Tool: selectProperty(log.tool),
@@ -1807,6 +1850,8 @@ export const repo = {
         | "purpose"
         | "tool"
         | "exerciseName"
+        | "workoutSlot"
+        | "completed"
         | "templateId"
         | "sets"
         | "reps"
@@ -1855,6 +1900,8 @@ export const repo = {
       Purpose: selectProperty(next.purpose),
       Tool: selectProperty(next.tool),
       ExerciseName: richTextProperty(next.exerciseName),
+      ...(next.workoutSlot !== undefined ? { WorkoutSlot: selectProperty(next.workoutSlot) } : {}),
+      ...(next.completed !== undefined ? { Completed: checkboxProperty(next.completed) } : {}),
       Intensity: selectProperty(next.intensity),
       ...(next.templateId !== undefined ? { TemplateId: richTextProperty(next.templateId) } : {}),
       ...(next.sets !== undefined ? { Sets: numberProperty(next.sets) } : {}),

@@ -18,8 +18,8 @@ import type {
   MealTemplate,
   RangeKey,
   Session,
-  WorkoutIntensity,
   WorkoutLog,
+  WorkoutSlot,
   WorkoutPurpose,
   WorkoutTemplate,
   WorkoutTool,
@@ -34,17 +34,6 @@ type GoalForm = {
   dDay: string;
   targetWeightKg: string;
   targetBodyFat: string;
-};
-
-type WorkoutForm = {
-  date: string;
-  bodyPart: BodyPart;
-  purpose: WorkoutPurpose;
-  tool: WorkoutTool;
-  exerciseName: string;
-  intensity: WorkoutIntensity;
-  durationMinutes: string;
-  templateId: string;
 };
 
 type BodyMetricForm = {
@@ -76,6 +65,29 @@ const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "dinner2", label: "저녁2" }
 ];
 
+const workoutSlots: Array<{ value: WorkoutSlot; label: string }> = [
+  { value: "am", label: "오전" },
+  { value: "pm", label: "오후" }
+];
+
+function defaultWorkoutBySlot(slot: WorkoutSlot): {
+  bodyPart: BodyPart;
+  purpose: WorkoutPurpose;
+  tool: WorkoutTool;
+  exerciseName: string;
+  durationMinutes: number;
+  intensity: NonNullable<WorkoutLog["intensity"]>;
+} {
+  return {
+    bodyPart: "full_body",
+    purpose: "fat_loss",
+    tool: "bodyweight",
+    exerciseName: slot === "am" ? "오전 운동 체크" : "오후 운동 체크",
+    durationMinutes: slot === "am" ? 20 : 30,
+    intensity: "medium"
+  };
+}
+
 const bodyPartOptions: Array<{ value: BodyPart; label: string }> = [
   { value: "chest", label: "가슴" },
   { value: "back", label: "등" },
@@ -102,12 +114,6 @@ const toolOptions: Array<{ value: WorkoutTool; label: string }> = [
   { value: "machine", label: "머신" },
   { value: "kettlebell", label: "케틀벨" },
   { value: "mixed", label: "혼합" }
-];
-
-const intensityOptions: Array<{ value: WorkoutIntensity; label: string }> = [
-  { value: "low", label: "낮음" },
-  { value: "medium", label: "보통" },
-  { value: "high", label: "높음" }
 ];
 
 const queryKeys = {
@@ -184,38 +190,13 @@ function formatDday(daysToDday?: number): string {
 }
 
 async function fetchSession(): Promise<Session | null> {
-  const response = await fetch("/api/v1/auth/guest");
-  if (response.status === 400 || response.status === 404) {
-    return null;
-  }
+  const response = await fetch("/api/v1/auth/session");
   if (!response.ok) {
     const message = await parseErrorMessage(response, "세션 확인에 실패했습니다.");
     throw new Error(message);
   }
   const payload = (await response.json()) as { data?: Session | null };
   return payload.data ?? null;
-}
-
-async function fetchDashboard(sessionId: string, range: RangeKey): Promise<DashboardSummary> {
-  const response = await fetch(
-    `/api/v1/dashboard?sessionId=${encodeURIComponent(sessionId)}&range=${encodeURIComponent(range)}`
-  );
-  if (!response.ok) {
-    throw new Error(await parseErrorMessage(response, "대시보드 조회에 실패했습니다."));
-  }
-  const payload = (await response.json()) as { data?: DashboardSummary };
-  return payload.data ?? {
-    range,
-    granularity: "day",
-    adherenceRate: 0,
-    totalMeals: 0,
-    totalWorkouts: 0,
-    latestWeightKg: null,
-    latestBodyFatPct: null,
-    daily: [],
-    buckets: [],
-    goals: []
-  };
 }
 
 async function fetchGoal(sessionId: string): Promise<Goal | null> {
@@ -430,17 +411,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     targetBodyFat: ""
   });
 
-  const [workoutForm, setWorkoutForm] = useState<WorkoutForm>({
-    date: todayYmd(),
-    bodyPart: "full_body",
-    purpose: "fat_loss",
-    tool: "bodyweight",
-    exerciseName: "",
-    intensity: "medium",
-    durationMinutes: "30",
-    templateId: ""
-  });
-
   const [bodyMetricForm, setBodyMetricForm] = useState<BodyMetricForm>({
     date: todayYmd(),
     weightKg: "",
@@ -507,18 +477,10 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const session = sessionQuery.data ?? null;
   const sessionId = session?.sessionId;
 
-  const dashboardQuery = useQuery({
-    queryKey: queryKeys.dashboard(sessionId ?? "", range),
-    queryFn: () => fetchDashboard(sessionId!, range),
-    enabled: Boolean(sessionId) && view === "dashboard",
-    staleTime: 120_000,
-    placeholderData: keepPreviousData
-  });
-
   const goalQuery = useQuery({
     queryKey: queryKeys.goal(sessionId ?? ""),
     queryFn: () => fetchGoal(sessionId!),
-    enabled: Boolean(sessionId) && (view === "dashboard" || view === "settings"),
+    enabled: Boolean(sessionId) && view === "settings",
     staleTime: 300_000,
     placeholderData: keepPreviousData
   });
@@ -579,11 +541,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   }, [sessionQuery.error]);
 
   useEffect(() => {
-    if (!(dashboardQuery.error instanceof Error)) {
+    if (!(bootstrapQuery.error instanceof Error) || view !== "dashboard") {
       return;
     }
-    setDashboardMessage({ type: "error", text: dashboardQuery.error.message });
-  }, [dashboardQuery.error]);
+    setDashboardMessage({ type: "error", text: bootstrapQuery.error.message });
+  }, [bootstrapQuery.error, view]);
 
   useEffect(() => {
     if (!(dayQuery.error instanceof Error)) {
@@ -642,12 +604,27 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   }, [bootstrapQuery.data, queryClient, range, sessionId]);
 
   useEffect(() => {
-    setWorkoutForm((prev) => ({ ...prev, date: selectedDate }));
+    if (!sessionId || view !== "dashboard") {
+      return;
+    }
+    for (const targetRange of ranges) {
+      if (targetRange === range) {
+        continue;
+      }
+      void queryClient.prefetchQuery({
+        queryKey: queryKeys.bootstrap(sessionId, "dashboard", selectedDate, targetRange),
+        queryFn: () => fetchBootstrap(sessionId, "dashboard", selectedDate, targetRange),
+        staleTime: 120_000
+      });
+    }
+  }, [queryClient, range, selectedDate, sessionId, view]);
+
+  useEffect(() => {
     setBodyMetricForm((prev) => ({ ...prev, date: selectedDate }));
   }, [selectedDate]);
 
-  const dashboard = (dashboardQuery.data ?? null) as DashboardSummary | null;
-  const goal = (goalQuery.data ?? null) as Goal | null;
+  const dashboard = ((view === "dashboard" ? bootstrapQuery.data?.dashboard : null) ?? null) as DashboardSummary | null;
+  const goal = ((view === "settings" ? goalQuery.data : bootstrapQuery.data?.goal) ?? null) as Goal | null;
   const dayData = (dayQuery.data ?? defaultDaySnapshot(selectedDate)) as DaySnapshot;
   const mealTemplates = (mealTemplatesQuery.data ?? []) as MealTemplate[];
   const workoutTemplates = (workoutTemplatesQuery.data ?? []) as WorkoutTemplate[];
@@ -655,7 +632,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const reminderEvaluation = (reminderEvaluationQuery.data ?? null) as ReminderEvaluation | null;
   const isSyncing = (() => {
     if (view === "dashboard") {
-      return sessionQuery.isFetching || dashboardQuery.isFetching || bootstrapQuery.isFetching || goalQuery.isFetching;
+      return sessionQuery.isFetching || bootstrapQuery.isFetching;
     }
     if (view === "records") {
       return sessionQuery.isFetching || dayQuery.isFetching || reminderEvaluationQuery.isFetching;
@@ -765,34 +742,19 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   const activeMealTemplates = useMemo(() => mealTemplates.filter((item) => item.isActive), [mealTemplates]);
   const activeWorkoutTemplates = useMemo(() => workoutTemplates.filter((item) => item.isActive), [workoutTemplates]);
-
-  async function createGuestSession(): Promise<void> {
-    const response = await fetch("/api/v1/auth/guest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({})
-    });
-
-    if (!response.ok) {
-      setSessionMessage({ type: "error", text: await parseErrorMessage(response, "게스트 세션 생성에 실패했습니다.") });
-      return;
+  const workoutCheckinBySlot = useMemo(() => {
+    const map = new Map<WorkoutSlot, WorkoutLog>();
+    for (const item of dayData.workoutLogs) {
+      if (item.isDeleted || !item.workoutSlot) {
+        continue;
+      }
+      const existing = map.get(item.workoutSlot);
+      if (!existing || item.createdAt > existing.createdAt) {
+        map.set(item.workoutSlot, item);
+      }
     }
-
-    const payload = (await response.json()) as { data?: Session };
-    if (!payload.data) {
-      setSessionMessage({ type: "error", text: "세션 응답이 비정상입니다." });
-      return;
-    }
-
-    queryClient.setQueryData(queryKeys.session, payload.data);
-    setSessionMessage({ type: "success", text: "게스트 세션이 시작되었습니다." });
-
-    const sid = payload.data.sessionId;
-    void queryClient.prefetchQuery({
-      queryKey: queryKeys.bootstrap(sid, view, selectedDate, range),
-      queryFn: () => fetchBootstrap(sid, view, selectedDate, range)
-    });
-  }
+    return map;
+  }, [dayData.workoutLogs]);
 
   function toggleReminderChannel(channel: ReminderChannel): void {
     setReminderForm((prev) => {
@@ -807,7 +769,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   async function saveReminderSettingsAction(): Promise<void> {
     if (!sessionId) {
-      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setSettingsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -860,10 +822,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   }
 
   async function upgradeWithGoogle(): Promise<void> {
-    if (!sessionId) {
-      setSettingsMessage({ type: "error", text: "먼저 게스트 세션을 시작해 주세요." });
-      return;
-    }
     if (isGoogleUpgrading) {
       return;
     }
@@ -872,18 +830,19 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     try {
       const clientId = await fetchGoogleWebClientId();
       const idToken = await requestGoogleCredential(clientId);
-      const response = await fetch("/api/v1/auth/upgrade/google", {
+      const shouldUpgradeGuest = Boolean(sessionId) && session?.isGuest === true;
+      const response = await fetch(shouldUpgradeGuest ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId,
+          ...(shouldUpgradeGuest ? { sessionId } : {}),
           idToken,
           platform: "web"
         })
       });
 
       if (!response.ok) {
-        setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "Google 계정 전환에 실패했습니다.") });
+        setSettingsMessage({ type: "error", text: await parseErrorMessage(response, "Google 로그인에 실패했습니다.") });
         return;
       }
 
@@ -891,11 +850,11 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       if (payload.data) {
         queryClient.setQueryData(queryKeys.session, payload.data);
       }
-      setSettingsMessage({ type: "success", text: "Google 계정으로 전환되었습니다." });
+      setSettingsMessage({ type: "success", text: "Google 로그인에 성공했습니다." });
     } catch (error) {
       setSettingsMessage({
         type: "error",
-        text: error instanceof Error ? error.message : "Google 계정 전환에 실패했습니다."
+        text: error instanceof Error ? error.message : "Google 로그인에 실패했습니다."
       });
     } finally {
       setIsGoogleUpgrading(false);
@@ -909,9 +868,18 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     queryClient.setQueryData(queryKeys.day(sessionId, selectedDate), next);
   }
 
+  function invalidateDerivedViews(): void {
+    if (!sessionId) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["bootstrap", sessionId] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+  }
+
   async function upsertMealCheckin(slot: MealSlot, completed: boolean, templateId?: string): Promise<void> {
     if (!sessionId) {
-      setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setRecordsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -981,8 +949,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       });
     }
 
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+    invalidateDerivedViews();
   }
 
   async function deleteMealCheckin(slot: MealSlot): Promise<void> {
@@ -1015,72 +982,73 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+    invalidateDerivedViews();
   }
 
-  async function saveWorkoutLog(payload?: WorkoutTemplate): Promise<void> {
+  async function upsertWorkoutCheckin(slot: WorkoutSlot, completed: boolean, templateId?: string): Promise<void> {
     if (!sessionId) {
-      setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setRecordsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
-    const source = payload
-      ? {
-          date: selectedDate,
-          bodyPart: payload.bodyPart,
-          purpose: payload.purpose,
-          tool: payload.tool,
-          exerciseName: payload.label,
-          intensity: "medium" as WorkoutIntensity,
-          durationMinutes: payload.defaultDuration ?? 30,
-          templateId: payload.id
-        }
-      : {
-          date: workoutForm.date,
-          bodyPart: workoutForm.bodyPart,
-          purpose: workoutForm.purpose,
-          tool: workoutForm.tool,
-          exerciseName: workoutForm.exerciseName.trim() || "기본 운동",
-          intensity: workoutForm.intensity,
-          durationMinutes: Math.trunc(parseNumber(workoutForm.durationMinutes) ?? 30),
-          templateId: workoutForm.templateId || undefined
-        };
-
     const dayKey = queryKeys.day(sessionId, selectedDate);
     const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const existing = previous.workoutLogs.find((item) => item.workoutSlot === slot && item.isDeleted !== true);
+    const selectedTemplate = templateId ? activeWorkoutTemplates.find((item) => item.id === templateId) : undefined;
+    const defaults = defaultWorkoutBySlot(slot);
+
+    const nextDraft = {
+      bodyPart: selectedTemplate?.bodyPart ?? existing?.bodyPart ?? defaults.bodyPart,
+      purpose: selectedTemplate?.purpose ?? existing?.purpose ?? defaults.purpose,
+      tool: selectedTemplate?.tool ?? existing?.tool ?? defaults.tool,
+      exerciseName: selectedTemplate?.label ?? existing?.exerciseName ?? defaults.exerciseName,
+      intensity: existing?.intensity ?? defaults.intensity,
+      durationMinutes: selectedTemplate?.defaultDuration ?? existing?.durationMinutes ?? defaults.durationMinutes
+    };
+
     const optimisticWorkout: WorkoutLog = {
-      id: `tmp-workout-${Date.now()}`,
+      id: existing?.id ?? `tmp-workout-${Date.now()}`,
       userId: session?.userId ?? "temp-user",
-      date: source.date,
-      bodyPart: source.bodyPart,
-      purpose: source.purpose,
-      tool: source.tool,
-      exerciseName: source.exerciseName,
-      intensity: source.intensity,
-      ...(source.durationMinutes !== undefined ? { durationMinutes: source.durationMinutes } : {}),
-      ...(source.templateId ? { templateId: source.templateId } : {}),
+      date: selectedDate,
+      bodyPart: nextDraft.bodyPart,
+      purpose: nextDraft.purpose,
+      tool: nextDraft.tool,
+      exerciseName: nextDraft.exerciseName,
+      intensity: nextDraft.intensity,
+      workoutSlot: slot,
+      completed,
+      ...(nextDraft.durationMinutes !== undefined ? { durationMinutes: nextDraft.durationMinutes } : {}),
+      ...(templateId ? { templateId } : {}),
       createdAt: new Date().toISOString().slice(0, 10)
     };
 
     applyDayOptimistic({
       ...previous,
-      workoutLogs: [optimisticWorkout, ...previous.workoutLogs]
+      workoutLogs: existing
+        ? previous.workoutLogs.map((item) => (item.id === existing.id ? { ...item, ...optimisticWorkout } : item))
+        : [optimisticWorkout, ...previous.workoutLogs]
     });
 
-    const response = await fetch("/api/v1/workout-logs/quick", {
-      method: "POST",
+    setRecordsMessage({
+      type: "success",
+      text: `${workoutSlots.find((item) => item.value === slot)?.label ?? "운동"} 체크인을 저장했습니다.`
+    });
+
+    const response = await fetch(existing ? `/api/v1/workout-checkins/${existing.id}` : "/api/v1/workout-checkins", {
+      method: existing ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId,
-        ...source,
-        ...(source.templateId ? { templateId: source.templateId } : {})
+        date: selectedDate,
+        slot,
+        completed,
+        ...(templateId ? { templateId } : {})
       })
     });
 
     if (!response.ok) {
       applyDayOptimistic(previous);
-      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "운동 저장에 실패했습니다.") });
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "운동 체크인 저장에 실패했습니다.") });
       return;
     }
 
@@ -1090,17 +1058,46 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       const current = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? previous;
       applyDayOptimistic({
         ...current,
-        workoutLogs: [saved, ...current.workoutLogs.filter((item) => !item.id.startsWith("tmp-workout-"))]
+        workoutLogs: [saved, ...current.workoutLogs.filter((item) => item.id !== saved.id && !item.id.startsWith("tmp-workout-"))]
       });
     }
 
-    setWorkoutForm((prev) => ({ ...prev, exerciseName: "" }));
-    setRecordsMessage({ type: "success", text: "운동을 저장했습니다." });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+    invalidateDerivedViews();
   }
 
-  async function deleteWorkoutLog(id: string): Promise<void> {
+  async function deleteWorkoutCheckin(slot: WorkoutSlot): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    const dayKey = queryKeys.day(sessionId, selectedDate);
+    const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
+    const existing = previous.workoutLogs.find((item) => item.workoutSlot === slot && item.isDeleted !== true);
+    if (!existing) {
+      return;
+    }
+    applyDayOptimistic({
+      ...previous,
+      workoutLogs: previous.workoutLogs.filter((item) => item.id !== existing.id)
+    });
+
+    const response = await fetch(`/api/v1/workout-checkins/${existing.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId })
+    });
+
+    if (!response.ok) {
+      applyDayOptimistic(previous);
+      setRecordsMessage({ type: "error", text: await parseErrorMessage(response, "운동 체크인 삭제에 실패했습니다.") });
+      return;
+    }
+
+    setRecordsMessage({ type: "info", text: "운동 체크인을 삭제했습니다." });
+    invalidateDerivedViews();
+  }
+
+  async function deleteWorkoutLogById(id: string): Promise<void> {
     if (!sessionId) {
       return;
     }
@@ -1125,13 +1122,12 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     }
 
     setRecordsMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(sessionId, range) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.reminderEval(sessionId, selectedDate) });
+    invalidateDerivedViews();
   }
 
   async function saveBodyMetric(): Promise<void> {
     if (!sessionId) {
-      setRecordsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setRecordsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -1221,7 +1217,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   async function saveGoal(): Promise<void> {
     if (!sessionId) {
-      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setSettingsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
 
@@ -1273,7 +1269,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   async function createMealTemplateAction(): Promise<void> {
     if (!sessionId) {
-      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setSettingsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
     if (!mealTemplateForm.label.trim()) {
@@ -1380,7 +1376,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
   async function createWorkoutTemplateAction(): Promise<void> {
     if (!sessionId) {
-      setSettingsMessage({ type: "error", text: "먼저 세션을 시작해 주세요." });
+      setSettingsMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
       return;
     }
     if (!workoutTemplateForm.label.trim()) {
@@ -1564,28 +1560,22 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <p className="header-sub">식단 체크인, 운동, 체성분, 목표를 페이지별로 분리해 관리합니다.</p>
         </div>
         <div className="header-actions">
-          {view === "settings" ? (
-            <>
-              <button type="button" className="button button-primary" onClick={() => void createGuestSession()}>
-                게스트 세션 시작
-              </button>
-              <button
-                type="button"
-                className="button"
-                disabled={!session}
-                onClick={() =>
-                  setSessionMessage({ type: "info", text: session ? `세션 ID: ${session.sessionId}` : "세션 없음" })
-                }
-              >
-                세션 확인
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="session-badge">{session ? "세션 연결됨" : "세션 시작은 설정 페이지에서"}</p>
-              <p className="session-badge">{isSyncing ? "동기화 중..." : "동기화 완료"}</p>
-            </>
-          )}
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={isGoogleUpgrading}
+            onClick={() => void upgradeWithGoogle()}
+          >
+            {isGoogleUpgrading
+              ? "Google 인증 중..."
+              : session?.authProvider === "google"
+                ? "Google 재인증"
+                : "Google 로그인"}
+          </button>
+          <p className="session-badge">
+            {session?.authProvider === "google" ? `Google 연결됨 (${session.email ?? "이메일 없음"})` : "로그인 필요"}
+          </p>
+          <p className="session-badge">{isSyncing ? "동기화 중..." : "동기화 완료"}</p>
         </div>
         {sessionMessage ? (
           <p className={`status status-${sessionMessage.type}`} aria-live="polite">
@@ -1640,7 +1630,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <div className="trend-panel">
             <h3>점수 추세 ({dashboard?.granularity ?? "day"} 기준)</h3>
-            {!dashboard && dashboardQuery.isPending ? (
+            {!dashboard && bootstrapQuery.isPending ? (
               <p className="hint">대시보드를 불러오는 중입니다.</p>
             ) : !dashboard || dashboard.buckets.length === 0 ? (
               <p className="hint">기록이 쌓이면 추세 버킷을 표시합니다.</p>
@@ -1754,146 +1744,92 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
             )}
           </section>
 
-          <section className="card split-grid">
-            <article>
-              <h2>운동 Quick Log</h2>
-              {activeWorkoutTemplates.length > 0 ? (
-                <div className="chip-row">
-                  {activeWorkoutTemplates.map((template) => (
-                    <button key={template.id} type="button" className="recommend-chip" onClick={() => void saveWorkoutLog(template)}>
-                      {template.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="hint">설정 페이지에서 운동 템플릿을 등록하면 1탭 저장이 가능합니다.</p>
-              )}
+          <section className="card">
+            <h2>운동 체크인</h2>
+            <p className="hint">오전/오후 슬롯에서 함/안함만 기록합니다. 템플릿 선택 시 즉시 저장됩니다.</p>
+            <div className="slot-grid">
+              {workoutSlots.map((slot) => {
+                const current = workoutCheckinBySlot.get(slot.value);
+                return (
+                  <article key={slot.value} className="slot-card">
+                    <div className="slot-head">
+                      <h3>{slot.label}</h3>
+                      {current ? (
+                        <span className="slot-state">{current.completed ? "함" : "안함"}</span>
+                      ) : (
+                        <span className="slot-state">미기록</span>
+                      )}
+                    </div>
+                    <div className="slot-actions">
+                      <button type="button" className="button button-primary" onClick={() => void upsertWorkoutCheckin(slot.value, true)}>
+                        함
+                      </button>
+                      <button type="button" className="button" onClick={() => void upsertWorkoutCheckin(slot.value, false)}>
+                        안함
+                      </button>
+                      {current ? (
+                        <button type="button" className="button" onClick={() => void deleteWorkoutCheckin(slot.value)}>
+                          삭제
+                        </button>
+                      ) : null}
+                    </div>
+                    {activeWorkoutTemplates.length > 0 ? (
+                      <div className="chip-row">
+                        {activeWorkoutTemplates.map((template) => (
+                          <button
+                            key={template.id}
+                            type="button"
+                            className={current?.templateId === template.id ? "recommend-chip is-selected" : "recommend-chip"}
+                            onClick={() => void upsertWorkoutCheckin(slot.value, true, template.id)}
+                          >
+                            {template.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="hint">설정 페이지에서 운동 템플릿을 추가하면 1탭 선택이 가능합니다.</p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
 
-              <div className="form-grid">
-                <label className="field">
-                  <span>날짜</span>
-                  <input
-                    type="date"
-                    value={workoutForm.date}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, date: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>부위</span>
-                  <select
-                    value={workoutForm.bodyPart}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, bodyPart: event.target.value as BodyPart }))}
-                  >
-                    {bodyPartOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>목적</span>
-                  <select
-                    value={workoutForm.purpose}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, purpose: event.target.value as WorkoutPurpose }))}
-                  >
-                    {purposeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>도구</span>
-                  <select
-                    value={workoutForm.tool}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, tool: event.target.value as WorkoutTool }))}
-                  >
-                    {toolOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field full-span">
-                  <span>운동명</span>
-                  <input
-                    type="text"
-                    value={workoutForm.exerciseName}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, exerciseName: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>강도</span>
-                  <select
-                    value={workoutForm.intensity}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, intensity: event.target.value as WorkoutIntensity }))}
-                  >
-                    {intensityOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>시간(분)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={300}
-                    value={workoutForm.durationMinutes}
-                    onChange={(event) => setWorkoutForm((prev) => ({ ...prev, durationMinutes: event.target.value }))}
-                  />
-                </label>
-              </div>
-              <button
-                type="button"
-                className="button button-primary full-width action-gap-lg"
-                onClick={() => void saveWorkoutLog()}
-              >
-                운동 저장
-              </button>
-            </article>
-
-            <article>
-              <h2>체중/체지방 기록</h2>
-              <div className="form-grid">
-                <label className="field full-span">
-                  <span>날짜</span>
-                  <input
-                    type="date"
-                    value={bodyMetricForm.date}
-                    onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, date: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>체중(kg)</span>
-                  <input
-                    type="number"
-                    value={bodyMetricForm.weightKg}
-                    onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, weightKg: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>체지방(%)</span>
-                  <input
-                    type="number"
-                    value={bodyMetricForm.bodyFatPct}
-                    onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, bodyFatPct: event.target.value }))}
-                  />
-                </label>
-              </div>
-              <button
-                type="button"
-                className="button button-primary full-width action-gap-lg"
-                onClick={() => void saveBodyMetric()}
-              >
-                체성분 저장
-              </button>
-            </article>
+          <section className="card">
+            <h2>체중/체지방 기록</h2>
+            <div className="form-grid">
+              <label className="field full-span">
+                <span>날짜</span>
+                <input
+                  type="date"
+                  value={bodyMetricForm.date}
+                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, date: event.target.value }))}
+                />
+              </label>
+              <label className="field">
+                <span>체중(kg)</span>
+                <input
+                  type="number"
+                  value={bodyMetricForm.weightKg}
+                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, weightKg: event.target.value }))}
+                />
+              </label>
+              <label className="field">
+                <span>체지방(%)</span>
+                <input
+                  type="number"
+                  value={bodyMetricForm.bodyFatPct}
+                  onChange={(event) => setBodyMetricForm((prev) => ({ ...prev, bodyFatPct: event.target.value }))}
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              className="button button-primary full-width action-gap-lg"
+              onClick={() => void saveBodyMetric()}
+            >
+              체성분 저장
+            </button>
           </section>
 
           <section className="card split-grid">
@@ -1906,12 +1842,18 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   dayData.workoutLogs.map((item) => (
                     <div key={item.id} className="record-item">
                       <div>
-                        <strong>{item.exerciseName}</strong>
+                        <strong>
+                          {item.workoutSlot
+                            ? `${workoutSlots.find((slot) => slot.value === item.workoutSlot)?.label ?? item.workoutSlot} ${
+                                item.completed === false ? "안함" : "함"
+                              }`
+                            : item.exerciseName}
+                        </strong>
                         <p className="hint">
-                          {item.bodyPart} / {item.purpose} / {item.tool} / {item.durationMinutes ?? 30}분
+                          {item.exerciseName} / {item.bodyPart} / {item.purpose} / {item.tool} / {item.durationMinutes ?? 30}분
                         </p>
                       </div>
-                      <button type="button" className="button" onClick={() => void deleteWorkoutLog(item.id)}>
+                      <button type="button" className="button" onClick={() => void deleteWorkoutLogById(item.id)}>
                         삭제
                       </button>
                     </div>
@@ -2001,23 +1943,25 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <section className="card split-grid settings-template-grid">
             <article>
-              <h2>계정 전환</h2>
-              <p className="hint">게스트로 시작한 데이터를 Google 계정으로 전환하면 다른 기기에서도 복원할 수 있습니다.</p>
+              <h2>Google 로그인</h2>
+              <p className="hint">Google 로그인 1회 후 웹/모바일에서 동일 계정 데이터로 동기화됩니다.</p>
               <button
                 type="button"
                 className="button button-primary full-width settings-submit"
-                disabled={!session || isGoogleUpgrading}
+                disabled={isGoogleUpgrading}
                 onClick={() => void upgradeWithGoogle()}
               >
-                {isGoogleUpgrading ? "Google 인증 중..." : "Google로 계정 전환"}
+                {isGoogleUpgrading
+                  ? "Google 인증 중..."
+                  : session?.authProvider === "google"
+                    ? "Google 재로그인"
+                    : "Google 로그인"}
               </button>
               <p className="hint">
                 현재 상태:{" "}
                 {session?.authProvider === "google"
                   ? `Google 연결됨 (${session.email ?? "이메일 없음"})`
-                  : session
-                    ? "게스트 세션"
-                    : "세션 없음"}
+                  : "Google 로그인 필요"}
               </p>
             </article>
 
@@ -2065,7 +2009,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   />
                 </label>
               </div>
-              <div className="chip-row">
+              <div className="chip-row reminder-channel-row">
                 <button
                   type="button"
                   className={reminderForm.channels.includes("web_in_app") ? "recommend-chip is-selected" : "recommend-chip"}

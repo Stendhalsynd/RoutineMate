@@ -26,6 +26,7 @@ const nonEmptyString = z.string().trim().min(1);
 const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "Expected HH:MM");
 const googlePlatformSchema = z.enum(["web", "android"]);
 const googleAuthModeSchema = z.enum(["id_token", "auth_code_pkce", "native_sdk"]);
+const workoutSlotSchema = z.enum(["am", "pm"]);
 
 export const rangeSchema = z.enum(["7d", "30d", "90d"]);
 
@@ -126,6 +127,8 @@ export const quickWorkoutLogInputSchema = z.object({
   purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]),
   tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]),
   exerciseName: nonEmptyString.max(120),
+  workoutSlot: workoutSlotSchema.optional(),
+  completed: z.boolean().optional(),
   templateId: nonEmptyString.optional(),
   sets: z.number().int().min(1).max(20).optional(),
   reps: z.number().int().min(1).max(100).optional(),
@@ -143,6 +146,8 @@ export const quickWorkoutLogUpdateSchema = z
     purpose: z.enum(["muscle_gain", "fat_loss", "endurance", "mobility", "recovery"]).optional(),
     tool: z.enum(["bodyweight", "dumbbell", "machine", "barbell", "kettlebell", "mixed"]).optional(),
     exerciseName: nonEmptyString.max(120).optional(),
+    workoutSlot: workoutSlotSchema.optional(),
+    completed: z.boolean().optional(),
     templateId: nonEmptyString.optional(),
     sets: z.number().int().min(1).max(20).optional(),
     reps: z.number().int().min(1).max(100).optional(),
@@ -157,12 +162,42 @@ export const quickWorkoutLogUpdateSchema = z
       value.purpose !== undefined ||
       value.tool !== undefined ||
       value.exerciseName !== undefined ||
+      value.workoutSlot !== undefined ||
+      value.completed !== undefined ||
       value.templateId !== undefined ||
       value.sets !== undefined ||
       value.reps !== undefined ||
       value.weightKg !== undefined ||
       value.durationMinutes !== undefined ||
       value.intensity !== undefined,
+    {
+      message: "At least one field is required"
+    }
+  );
+
+export const workoutCheckinInputSchema = z.object({
+  sessionId: nonEmptyString,
+  date: isoDateSchema,
+  slot: workoutSlotSchema,
+  completed: z.boolean(),
+  templateId: nonEmptyString.optional()
+});
+
+export const workoutCheckinUpdateSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    id: nonEmptyString,
+    date: isoDateSchema.optional(),
+    slot: workoutSlotSchema.optional(),
+    completed: z.boolean().optional(),
+    templateId: nonEmptyString.optional()
+  })
+  .refine(
+    (value) =>
+      value.date !== undefined ||
+      value.slot !== undefined ||
+      value.completed !== undefined ||
+      value.templateId !== undefined,
     {
       message: "At least one field is required"
     }
