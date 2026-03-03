@@ -54,6 +54,28 @@ async function makeSession(): Promise<SessionResponse["data"]> {
   return sessionPayload.data;
 }
 
+async function createActiveMealTemplateForSlot(
+  sessionId: string,
+  mealSlot: "breakfast" | "lunch" | "dinner" | "dinner2",
+  label = "기본 식단 템플릿"
+): Promise<{ id: string }> {
+  const response = await createMealTemplate(
+    new Request("http://localhost/api/v1/templates/meals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        label,
+        mealSlot,
+        isActive: true
+      })
+    })
+  );
+  assert.equal(response.status, 201);
+  const payload = (await response.json()) as { data: { id: string } };
+  return payload.data;
+}
+
 beforeEach(async () => {
   await repo.clear();
 });
@@ -298,6 +320,85 @@ test("POST /v1/auth/google/session rejects native_sdk token when azp mismatches 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("Google 중복 세션이 canonical userId로 자동 통합되고 /v1/auth/session이 canonical cookie를 재설정한다", async () => {
+  const firstGuest = await makeSession();
+  const firstUpgradeResponse = await upgradeGoogleSession(
+    new Request("http://localhost/api/v1/auth/upgrade/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: firstGuest.sessionId,
+        idToken: "test:google-merge-sub:merge-user@example.com",
+        platform: "web"
+      })
+    })
+  );
+  assert.equal(firstUpgradeResponse.status, 200);
+  const firstUpgradePayload = (await firstUpgradeResponse.json()) as {
+    data: { sessionId: string; userId: string };
+  };
+
+  const secondGuest = await makeSession();
+  const secondMetricResponse = await createBodyMetric(
+    new Request("http://localhost/api/v1/body-metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: secondGuest.sessionId,
+        date: "2026-03-03",
+        weightKg: 71.2
+      })
+    })
+  );
+  assert.equal(secondMetricResponse.status, 201);
+
+  const secondUpgradeResponse = await upgradeGoogleSession(
+    new Request("http://localhost/api/v1/auth/upgrade/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: secondGuest.sessionId,
+        idToken: "test:google-merge-sub:merge-user@example.com",
+        platform: "android"
+      })
+    })
+  );
+  assert.equal(secondUpgradeResponse.status, 200);
+  const secondUpgradePayload = (await secondUpgradeResponse.json()) as {
+    data: { sessionId: string; userId: string };
+  };
+  assert.equal(secondUpgradePayload.data.userId, firstUpgradePayload.data.userId);
+  assert.equal(secondUpgradePayload.data.sessionId, firstUpgradePayload.data.sessionId);
+
+  const canonicalDay = await getCalendarDay(
+    new Request(
+      `http://localhost/api/v1/calendar/day?sessionId=${encodeURIComponent(secondUpgradePayload.data.sessionId)}&date=2026-03-03`
+    )
+  );
+  assert.equal(canonicalDay.status, 200);
+  const canonicalDayPayload = (await canonicalDay.json()) as {
+    data: { bodyMetrics: Array<{ weightKg?: number }> };
+  };
+  assert.equal(canonicalDayPayload.data.bodyMetrics.length, 1);
+  assert.equal(canonicalDayPayload.data.bodyMetrics[0]?.weightKg, 71.2);
+
+  const staleCookieSession = await getAuthSession(
+    new Request("http://localhost/api/v1/auth/session", {
+      headers: {
+        cookie: `routinemate_session_id=${secondGuest.sessionId}`
+      }
+    })
+  );
+  assert.equal(staleCookieSession.status, 200);
+  const stalePayload = (await staleCookieSession.json()) as {
+    data: { sessionId: string; userId: string };
+  };
+  assert.equal(stalePayload.data.sessionId, firstUpgradePayload.data.sessionId);
+  assert.equal(stalePayload.data.userId, firstUpgradePayload.data.userId);
+  const setCookieHeader = staleCookieSession.headers.get("set-cookie");
+  assert.equal(setCookieHeader?.includes(firstUpgradePayload.data.sessionId), true);
 });
 
 test("GET /v1/dashboard without sessionId returns 400", async () => {
@@ -581,6 +682,7 @@ test("PATCH /v1/body-metrics returns 404 for unknown log id", async () => {
 
 test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
   const session = await makeSession();
+  const mealTemplate = await createActiveMealTemplateForSlot(session.sessionId, "dinner2", "저녁2 테스트 템플릿");
 
   const createdResponse = await createMealCheckin(
     new Request("http://localhost/api/v1/meal-checkins", {
@@ -590,7 +692,8 @@ test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
         sessionId: session.sessionId,
         date: "2026-03-01",
         slot: "dinner2",
-        completed: true
+        completed: true,
+        templateId: mealTemplate.id
       })
     })
   );
@@ -630,6 +733,45 @@ test("POST/PATCH/DELETE /v1/meal-checkins works with soft delete", async () => {
     data: { mealCheckins: Array<{ id: string }> };
   };
   assert.equal(dayPayload.data.mealCheckins.length, 0);
+});
+
+test("POST /v1/meal-checkins는 completed=true일 때 슬롯별 템플릿이 필수다", async () => {
+  const session = await makeSession();
+  await createActiveMealTemplateForSlot(session.sessionId, "lunch", "점심 템플릿");
+
+  const noTemplateResponse = await createMealCheckin(
+    new Request("http://localhost/api/v1/meal-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-02",
+        slot: "lunch",
+        completed: true
+      })
+    })
+  );
+  assert.equal(noTemplateResponse.status, 400);
+  const noTemplatePayload = (await noTemplateResponse.json()) as { error?: { message?: string } };
+  assert.equal(noTemplatePayload.error?.message, "해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+
+  const mismatchTemplate = await createActiveMealTemplateForSlot(session.sessionId, "dinner", "저녁 템플릿");
+  const mismatchResponse = await createMealCheckin(
+    new Request("http://localhost/api/v1/meal-checkins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-02",
+        slot: "lunch",
+        completed: true,
+        templateId: mismatchTemplate.id
+      })
+    })
+  );
+  assert.equal(mismatchResponse.status, 400);
+  const mismatchPayload = (await mismatchResponse.json()) as { error?: { message?: string } };
+  assert.equal(mismatchPayload.error?.message, "선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
 });
 
 test("POST/PATCH/DELETE /v1/workout-checkins works with am/pm slots", async () => {
@@ -856,6 +998,7 @@ test("meal/workout template CRUD routes work", async () => {
 
 test("GET/POST /v1/reminders/settings and GET /v1/reminders/evaluate work", async () => {
   const session = await makeSession();
+  const breakfastTemplate = await createActiveMealTemplateForSlot(session.sessionId, "breakfast", "아침 체크 템플릿");
 
   const saveResponse = await saveReminderSettings(
     new Request("http://localhost/api/v1/reminders/settings", {
@@ -902,7 +1045,8 @@ test("GET/POST /v1/reminders/settings and GET /v1/reminders/evaluate work", asyn
         sessionId: session.sessionId,
         date: "2026-03-01",
         slot: "breakfast",
-        completed: true
+        completed: true,
+        templateId: breakfastTemplate.id
       })
     })
   );

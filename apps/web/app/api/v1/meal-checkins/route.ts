@@ -56,11 +56,28 @@ export async function POST(request: Request) {
       return notFound("Session was not found.");
     }
 
+    const templates = await repo.listMealTemplatesByUser(session.userId);
+    const slotTemplates = templates.filter((item) => item.isActive && item.mealSlot === parsed.data.slot);
+    const selectedTemplate = parsed.data.templateId
+      ? slotTemplates.find((item) => item.id === parsed.data.templateId)
+      : undefined;
+
+    if (parsed.data.completed) {
+      if (!parsed.data.templateId || slotTemplates.length === 0) {
+        return badRequest("해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+      }
+      if (!selectedTemplate) {
+        return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+      }
+    } else if (parsed.data.templateId && !selectedTemplate) {
+      return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+    }
+
     const saved = await repo.addMealCheckin(session.userId, {
       date: parsed.data.date,
       slot: parsed.data.slot,
       completed: parsed.data.completed,
-      ...(parsed.data.templateId ? { templateId: parsed.data.templateId } : {})
+      ...(parsed.data.completed && selectedTemplate ? { templateId: selectedTemplate.id } : {})
     });
 
     return ok(saved, 201);

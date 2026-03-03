@@ -1,6 +1,6 @@
 import { internalError, ok } from "@/lib/api-utils";
 import { repo } from "@/lib/repository";
-import { getSessionIdFromRequest } from "@/lib/session-cookie";
+import { getSessionIdFromRequest, setSessionCookie } from "@/lib/session-cookie";
 
 export async function GET(request: Request) {
   try {
@@ -9,7 +9,20 @@ export async function GET(request: Request) {
       return ok(null, 200);
     }
     const session = await repo.getSession(sessionId);
-    return ok(session ?? null, 200);
+    if (!session) {
+      return ok(null, 200);
+    }
+
+    if (session.authProvider === "google") {
+      const canonical = await repo.resolveCanonicalGoogleSession(session);
+      const response = ok(canonical, 200);
+      if (canonical.sessionId !== session.sessionId) {
+        setSessionCookie(response, canonical.sessionId);
+      }
+      return response;
+    }
+
+    return ok(session, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load session.";
     return internalError(message);

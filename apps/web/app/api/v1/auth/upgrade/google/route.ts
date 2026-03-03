@@ -37,8 +37,10 @@ export async function POST(request: Request) {
       return notFound("Session was not found.");
     }
 
-    const response = ok(upgraded, 200);
-    setSessionCookie(response, upgraded.sessionId);
+    const canonical = await repo.createOrRestoreGoogleSession(profile);
+
+    const response = ok(canonical, 200);
+    setSessionCookie(response, canonical.sessionId);
     return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to upgrade session with Google.";

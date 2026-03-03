@@ -607,12 +607,30 @@ export default function App(): React.JSX.Element {
       }
 
       const existing = checkinBySlot.get(slot);
+      const slotTemplates = activeMealTemplates.filter((item) => item.mealSlot === slot);
+      const selectedTemplateId = completed
+        ? (() => {
+            if (templateId && slotTemplates.some((item) => item.id === templateId)) {
+              return templateId;
+            }
+            if (existing?.templateId && slotTemplates.some((item) => item.id === existing.templateId)) {
+              return existing.templateId;
+            }
+            return slotTemplates[0]?.id;
+          })()
+        : undefined;
+
+      if (completed && !selectedTemplateId) {
+        setMessage({ type: "error", text: "해당 슬롯의 활성 식단 템플릿이 필요합니다." });
+        return;
+      }
+
       const payload = {
         sessionId: session.sessionId,
         date: selectedDate,
         slot,
         completed,
-        ...(templateId ? { templateId } : {})
+        ...(selectedTemplateId ? { templateId: selectedTemplateId } : {})
       };
 
       const previousDay = day;
@@ -620,14 +638,30 @@ export default function App(): React.JSX.Element {
         id: existing?.id ?? `tmp-meal-${Date.now()}`,
         date: selectedDate,
         slot,
-        completed,
-        ...(templateId !== undefined ? { templateId } : {})
+        completed
       };
+      if (selectedTemplateId) {
+        optimistic.templateId = selectedTemplateId;
+      }
 
       setDay((current) => ({
         ...current,
         mealCheckins: existing
-          ? current.mealCheckins.map((item) => (item.id === existing.id ? { ...item, ...optimistic } : item))
+          ? current.mealCheckins.map((item) => {
+              if (item.id !== existing.id) {
+                return item;
+              }
+              const nextItem: MealCheckin = {
+                ...item,
+                completed
+              };
+              if (selectedTemplateId) {
+                nextItem.templateId = selectedTemplateId;
+              } else {
+                delete nextItem.templateId;
+              }
+              return nextItem;
+            })
           : [...current.mealCheckins, optimistic]
       }));
 
@@ -655,7 +689,7 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, session]
+    [activeMealTemplates, checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, session]
   );
 
   const deleteMealCheckin = React.useCallback(
@@ -1364,7 +1398,7 @@ export default function App(): React.JSX.Element {
                 미기록 상태입니다. 오늘 기록을 1건이라도 추가하면 경고가 해제됩니다.
               </Text>
             ) : null}
-            <Text style={styles.hint}>식단 체크인</Text>
+            <Text style={styles.sectionTitle}>식단 체크인</Text>
 
             {mealSlots.map((slot) => {
               const current = checkinBySlot.get(slot.value);
@@ -1375,7 +1409,8 @@ export default function App(): React.JSX.Element {
                   <Text style={styles.sectionSubTitle}>{slot.label}</Text>
                   <View style={styles.row}>
                     <Pressable
-                      style={[styles.chip, completed && styles.chipActive]}
+                      style={[styles.chip, completed && styles.chipActive, templates.length === 0 && styles.chipDisabled]}
+                      disabled={templates.length === 0}
                       onPress={() => {
                         void upsertMealCheckin(slot.value, true, current?.templateId);
                       }}
@@ -2093,6 +2128,9 @@ const styles = StyleSheet.create({
   chipActive: {
     borderColor: colors.brand,
     backgroundColor: "#e5f5ef"
+  },
+  chipDisabled: {
+    opacity: 0.45
   },
   chipText: {
     color: colors.textPrimary,

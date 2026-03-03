@@ -105,6 +105,12 @@ function richTextProperty(value: string): Record<string, unknown> {
   };
 }
 
+function clearRichTextProperty(): Record<string, unknown> {
+  return {
+    rich_text: []
+  };
+}
+
 function selectProperty(value: string): Record<string, unknown> {
   return {
     select: { name: value }
@@ -758,6 +764,323 @@ async function ensureNotionSchemaValidated(): Promise<void> {
   return guarded;
 }
 
+type GoogleSessionCandidate = {
+  pageId?: string;
+  session: Session;
+};
+
+type GoogleCanonicalInput = {
+  email?: string;
+  sub?: string;
+  picture?: string;
+};
+
+function sessionTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pickCanonicalGoogleSession(
+  candidates: GoogleSessionCandidate[],
+  preferredSub?: string
+): GoogleSessionCandidate | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+  const prioritized =
+    preferredSub && preferredSub.length > 0
+      ? candidates.filter((item) => item.session.providerSubject === preferredSub)
+      : [];
+  const pool = prioritized.length > 0 ? prioritized : candidates;
+  return [...pool].sort((a, b) => sessionTimestamp(a.session.createdAt) - sessionTimestamp(b.session.createdAt))[0] ?? null;
+}
+
+function dedupeGoogleCandidates(candidates: GoogleSessionCandidate[]): GoogleSessionCandidate[] {
+  const map = new Map<string, GoogleSessionCandidate>();
+  for (const candidate of candidates) {
+    if (!map.has(candidate.session.sessionId)) {
+      map.set(candidate.session.sessionId, candidate);
+    }
+  }
+  return [...map.values()];
+}
+
+async function queryGoogleSessionCandidates(input: GoogleCanonicalInput): Promise<GoogleSessionCandidate[]> {
+  const databases = getNotionDatabases();
+  const pagesById = new Map<string, NotionPage>();
+
+  if (input.email) {
+    const emailPages = await queryDatabasePages(databases.sessionsDbId, {
+      filter: {
+        property: "Email",
+        email: { equals: input.email }
+      }
+    });
+    for (const raw of emailPages) {
+      const page = toPage(raw);
+      pagesById.set(page.id, page);
+    }
+  }
+
+  if (input.sub) {
+    try {
+      const subPages = await queryDatabasePages(databases.sessionsDbId, {
+        filter: {
+          property: "ProviderSubject",
+          rich_text: { equals: input.sub }
+        }
+      });
+      for (const raw of subPages) {
+        const page = toPage(raw);
+        pagesById.set(page.id, page);
+      }
+    } catch (error) {
+      if (!isUnknownNotionPropertyError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const candidates = [...pagesById.values()]
+    .map((page) => ({ pageId: page.id, session: mapSession(page) }))
+    .filter((item): item is { pageId: string; session: Session } => item.session !== null)
+    .filter((item) => {
+      if (item.session.authProvider === "google") {
+        return true;
+      }
+      if (item.session.isGuest) {
+        return false;
+      }
+      return !!input.email && item.session.email === input.email;
+    })
+    .map(
+      (item): GoogleSessionCandidate => ({
+        pageId: item.pageId,
+        session: {
+          ...item.session,
+          authProvider: "google"
+        }
+      })
+    );
+
+  return dedupeGoogleCandidates(candidates);
+}
+
+function migrateMemoryUserData(fromUserId: string, toUserId: string): void {
+  if (fromUserId === toUserId) {
+    return;
+  }
+
+  for (const session of store.sessions.values()) {
+    if (session.userId === fromUserId) {
+      session.userId = toUserId;
+    }
+  }
+  for (const meal of store.meals) {
+    if (meal.userId === fromUserId) {
+      meal.userId = toUserId;
+    }
+  }
+  for (const checkin of store.mealCheckins) {
+    if (checkin.userId === fromUserId) {
+      checkin.userId = toUserId;
+    }
+  }
+  for (const workout of store.workouts) {
+    if (workout.userId === fromUserId) {
+      workout.userId = toUserId;
+    }
+  }
+  for (const metric of store.bodyMetrics) {
+    if (metric.userId === fromUserId) {
+      metric.userId = toUserId;
+    }
+  }
+  for (const goal of store.goals) {
+    if (goal.userId === fromUserId) {
+      goal.userId = toUserId;
+    }
+  }
+  for (const template of store.mealTemplates) {
+    if (template.userId === fromUserId) {
+      template.userId = toUserId;
+    }
+  }
+  for (const template of store.workoutTemplates) {
+    if (template.userId === fromUserId) {
+      template.userId = toUserId;
+    }
+  }
+  const reminder = store.reminderSettings.get(fromUserId);
+  if (reminder) {
+    store.reminderSettings.delete(fromUserId);
+    store.reminderSettings.set(toUserId, {
+      ...reminder,
+      userId: toUserId
+    });
+  }
+}
+
+async function migrateNotionUserData(fromUserId: string, toUserId: string): Promise<void> {
+  if (fromUserId === toUserId) {
+    return;
+  }
+
+  const databases = getNotionDatabases();
+  const databaseIds = [
+    databases.sessionsDbId,
+    databases.mealsDbId,
+    databases.workoutsDbId,
+    databases.bodyMetricsDbId,
+    databases.goalsDbId,
+    databases.mealTemplatesDbId,
+    databases.workoutTemplatesDbId,
+    databases.reminderSettingsDbId
+  ].filter((value): value is string => !!value);
+
+  for (const databaseId of databaseIds) {
+    const pages = await queryDatabasePages(databaseId, {
+      filter: {
+        property: "UserId",
+        rich_text: { equals: fromUserId }
+      }
+    });
+    for (const raw of pages) {
+      const page = toPage(raw);
+      await updateDatabasePage(page.id, {
+        UserId: richTextProperty(toUserId)
+      });
+    }
+  }
+}
+
+async function updateGoogleSessionCandidate(
+  candidate: GoogleSessionCandidate,
+  canonicalUserId: string,
+  input: GoogleCanonicalInput
+): Promise<void> {
+  if (!candidate.pageId) {
+    return;
+  }
+  const upgradedAt = nowIso();
+  await updateSessionPageWithOptionalFields(
+    candidate.pageId,
+    {
+      UserId: richTextProperty(canonicalUserId),
+      IsGuest: checkboxProperty(false),
+      ...(input.email ? { Email: emailProperty(input.email) } : {}),
+      UpgradedAt: dateProperty(upgradedAt)
+    },
+    {
+      AuthProvider: selectProperty("google"),
+      ...(input.sub ? { ProviderSubject: richTextProperty(input.sub) } : {}),
+      ...(input.picture ? { AvatarUrl: urlProperty(input.picture) } : {})
+    }
+  );
+}
+
+async function normalizeGoogleSessionByInput(input: GoogleCanonicalInput): Promise<GoogleSessionCandidate | null> {
+  if (!input.email && !input.sub) {
+    return null;
+  }
+
+  if (isMemoryMode()) {
+    const candidates = [...store.sessions.values()]
+      .filter((session) => {
+        if (session.authProvider !== "google") {
+          return false;
+        }
+        if (input.sub && session.providerSubject === input.sub) {
+          return true;
+        }
+        return !!input.email && session.email === input.email;
+      })
+      .map((session) => ({ session }));
+
+    const canonical = pickCanonicalGoogleSession(candidates, input.sub);
+    if (!canonical) {
+      const session: Session = {
+        sessionId: createId("sess"),
+        userId: createId("user"),
+        isGuest: false,
+        createdAt: nowIso(),
+        upgradedAt: nowIso(),
+        ...(input.email ? { email: input.email } : {}),
+        authProvider: "google",
+        ...(input.sub ? { providerSubject: input.sub } : {}),
+        ...(input.picture ? { avatarUrl: input.picture } : {})
+      };
+      store.sessions.set(session.sessionId, session);
+      return { session };
+    }
+
+    const canonicalUserId = canonical.session.userId;
+    for (const candidate of candidates) {
+      if (candidate.session.userId !== canonicalUserId) {
+        migrateMemoryUserData(candidate.session.userId, canonicalUserId);
+      }
+    }
+
+    for (const candidate of candidates) {
+      const next: Session = {
+        ...candidate.session,
+        userId: canonicalUserId,
+        isGuest: false,
+        authProvider: "google",
+        ...(input.email ? { email: input.email } : {}),
+        ...(input.sub ? { providerSubject: input.sub } : {}),
+        ...(input.picture ? { avatarUrl: input.picture } : {}),
+        upgradedAt: nowIso()
+      };
+      store.sessions.set(next.sessionId, next);
+    }
+
+    const canonicalSession = store.sessions.get(canonical.session.sessionId) ?? canonical.session;
+    return { session: canonicalSession };
+  }
+
+  await ensureNotionSchemaValidated();
+  const candidates = await queryGoogleSessionCandidates(input);
+  const canonical = pickCanonicalGoogleSession(candidates, input.sub);
+  if (!canonical) {
+    return null;
+  }
+
+  const canonicalUserId = canonical.session.userId;
+  const migratedUserIds = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.session.userId === canonicalUserId || migratedUserIds.has(candidate.session.userId)) {
+      continue;
+    }
+    migratedUserIds.add(candidate.session.userId);
+    await migrateNotionUserData(candidate.session.userId, canonicalUserId);
+  }
+
+  for (const candidate of candidates) {
+    await updateGoogleSessionCandidate(candidate, canonicalUserId, input);
+  }
+
+  const normalizedSession: Session = {
+    ...canonical.session,
+    userId: canonicalUserId,
+    isGuest: false,
+    authProvider: "google",
+    ...(input.email ? { email: input.email } : {}),
+    ...(input.sub ? { providerSubject: input.sub } : {}),
+    ...(input.picture ? { avatarUrl: input.picture } : {}),
+    upgradedAt: nowIso()
+  };
+  if (canonical.pageId) {
+    return {
+      pageId: canonical.pageId,
+      session: normalizedSession
+    };
+  }
+  return {
+    session: normalizedSession
+  };
+}
+
 export const repo = {
   async createGuestSession(deviceId?: string): Promise<Session> {
     if (isMemoryMode()) {
@@ -918,88 +1241,17 @@ export const repo = {
   },
 
   async createOrRestoreGoogleSession(profile: GoogleProfile): Promise<Session> {
-    if (isMemoryMode()) {
-      const found =
-        [...store.sessions.values()].find((item) => item.providerSubject === profile.sub && item.authProvider === "google") ??
-        null;
-      if (found) {
-        const restored = {
-          ...found,
-          email: profile.email,
-          ...(profile.picture ? { avatarUrl: profile.picture } : {})
-        };
-        store.sessions.set(restored.sessionId, restored);
-        return restored;
-      }
-      const session: Session = {
-        sessionId: createId("sess"),
-        userId: createId("user"),
-        isGuest: false,
-        createdAt: nowIso(),
-        upgradedAt: nowIso(),
-        email: profile.email,
-        authProvider: "google",
-        providerSubject: profile.sub,
-        ...(profile.picture ? { avatarUrl: profile.picture } : {})
-      };
-      store.sessions.set(session.sessionId, session);
-      return session;
+    const normalized = await normalizeGoogleSessionByInput({
+      email: profile.email,
+      sub: profile.sub,
+      ...(profile.picture ? { picture: profile.picture } : {})
+    });
+    if (normalized) {
+      return normalized.session;
     }
 
     await ensureNotionSchemaValidated();
     const databases = getNotionDatabases();
-    let existingPage: NotionPage | null = null;
-    try {
-      const result = await queryDatabasePages(databases.sessionsDbId, {
-        filter: {
-          property: "ProviderSubject",
-          rich_text: { equals: profile.sub }
-        }
-      });
-      existingPage = result.map(toPage).find((page) => getSelect(page, "AuthProvider") === "google") ?? null;
-    } catch (error) {
-      if (!isUnknownNotionPropertyError(error)) {
-        throw error;
-      }
-      const fallback = await queryDatabasePages(databases.sessionsDbId, {
-        filter: {
-          property: "Email",
-          email: { equals: profile.email }
-        }
-      });
-      existingPage =
-        fallback
-          .map(toPage)
-          .find((page) => {
-            const provider = getSelect(page, "AuthProvider");
-            return provider === "google" || provider === undefined;
-          }) ?? null;
-    }
-
-    if (existingPage) {
-      await updateSessionPageWithOptionalFields(
-        existingPage.id,
-        {
-          Email: emailProperty(profile.email)
-        },
-        {
-          ProviderSubject: richTextProperty(profile.sub),
-          ...(profile.picture ? { AvatarUrl: urlProperty(profile.picture) } : {})
-        }
-      );
-      const mappedExisting = mapSession(existingPage);
-      if (mappedExisting) {
-        return {
-          ...mappedExisting,
-          isGuest: false,
-          authProvider: "google",
-          providerSubject: profile.sub,
-          email: profile.email,
-          ...(profile.picture ? { avatarUrl: profile.picture } : {})
-        };
-      }
-    }
-
     const session: Session = {
       sessionId: createId("sess"),
       userId: createId("user"),
@@ -1029,6 +1281,22 @@ export const repo = {
       }
     );
     return session;
+  },
+
+  async resolveCanonicalGoogleSession(session: Session): Promise<Session> {
+    if (session.authProvider !== "google" || (!session.email && !session.providerSubject)) {
+      return session;
+    }
+
+    const normalized = await normalizeGoogleSessionByInput({
+      ...(session.email ? { email: session.email } : {}),
+      ...(session.providerSubject ? { sub: session.providerSubject } : {}),
+      ...(session.avatarUrl ? { picture: session.avatarUrl } : {})
+    });
+    if (!normalized) {
+      return session;
+    }
+    return normalized.session;
   },
 
   async getSession(sessionId: string): Promise<Session | null> {
@@ -1224,7 +1492,7 @@ export const repo = {
       );
       if (existing) {
         existing.completed = input.completed;
-        if (input.templateId !== undefined) {
+        if (input.completed && input.templateId !== undefined) {
           existing.templateId = input.templateId;
         } else {
           delete existing.templateId;
@@ -1238,7 +1506,7 @@ export const repo = {
         date: input.date,
         slot: input.slot,
         completed: input.completed,
-        ...(input.templateId ? { templateId: input.templateId } : {}),
+        ...(input.completed && input.templateId ? { templateId: input.templateId } : {}),
         isDeleted: false,
         createdAt: nowIso().slice(0, 10)
       };
@@ -1265,14 +1533,20 @@ export const repo = {
       if (mapped) {
         const next: MealCheckin = {
           ...mapped,
-          completed: input.completed,
-          ...(input.templateId !== undefined ? { templateId: input.templateId } : {})
+          completed: input.completed
         };
+        if (input.templateId !== undefined) {
+          next.templateId = input.templateId;
+        }
+        if (!input.completed) {
+          delete next.templateId;
+        }
+        const nextTemplateId = next.completed ? next.templateId : undefined;
         await updateDatabasePage(existingPage.id, {
           Date: dateProperty(next.date),
           MealSlot: selectProperty(next.slot),
           Completed: checkboxProperty(next.completed),
-          ...(next.templateId ? { TemplateId: richTextProperty(next.templateId) } : {}),
+          ...(nextTemplateId ? { TemplateId: richTextProperty(nextTemplateId) } : { TemplateId: clearRichTextProperty() }),
           IsDeleted: checkboxProperty(false),
           DeletedAt: { date: null }
         });
@@ -1286,7 +1560,7 @@ export const repo = {
       date: input.date,
       slot: input.slot,
       completed: input.completed,
-      ...(input.templateId ? { templateId: input.templateId } : {}),
+      ...(input.completed && input.templateId ? { templateId: input.templateId } : {}),
       isDeleted: false,
       createdAt: nowIso().slice(0, 10)
     };
@@ -1322,6 +1596,9 @@ export const repo = {
         ...current,
         ...updates
       };
+      if (next.completed === false) {
+        delete next.templateId;
+      }
       store.mealCheckins[index] = next;
       return next;
     }
@@ -1340,11 +1617,15 @@ export const repo = {
       ...current,
       ...updates
     };
+    if (next.completed === false) {
+      delete next.templateId;
+    }
+    const nextTemplateId = next.completed ? next.templateId : undefined;
     await updateDatabasePage(page.id, {
       Date: dateProperty(next.date),
       MealSlot: selectProperty(next.slot),
       Completed: checkboxProperty(next.completed),
-      ...(next.templateId ? { TemplateId: richTextProperty(next.templateId) } : {})
+      ...(nextTemplateId ? { TemplateId: richTextProperty(nextTemplateId) } : { TemplateId: clearRichTextProperty() })
     });
     return next;
   },

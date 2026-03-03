@@ -886,19 +886,42 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
     const dayKey = queryKeys.day(sessionId, selectedDate);
     const previous = (queryClient.getQueryData(dayKey) as DaySnapshot | undefined) ?? dayData;
     const existing = previous.mealCheckins.find((item) => item.slot === slot && item.isDeleted !== true);
+    const slotTemplates = activeMealTemplates.filter((item) => item.mealSlot === slot);
+    const selectedTemplateId = completed
+      ? (() => {
+          if (templateId && slotTemplates.some((item) => item.id === templateId)) {
+            return templateId;
+          }
+          if (existing?.templateId && slotTemplates.some((item) => item.id === existing.templateId)) {
+            return existing.templateId;
+          }
+          return slotTemplates[0]?.id;
+        })()
+      : undefined;
+
+    if (completed && !selectedTemplateId) {
+      setRecordsMessage({ type: "error", text: "해당 슬롯의 활성 식단 템플릿이 필요합니다." });
+      return;
+    }
 
     const optimistic: DaySnapshot = {
       ...previous,
       mealCheckins: existing
-        ? previous.mealCheckins.map((item) =>
-            item.id === existing.id
-              ? {
-                  ...item,
-                  completed,
-                  ...(templateId !== undefined ? { templateId } : {})
-                }
-              : item
-          )
+        ? previous.mealCheckins.map((item) => {
+            if (item.id !== existing.id) {
+              return item;
+            }
+            const nextItem: MealCheckin = {
+              ...item,
+              completed
+            };
+            if (selectedTemplateId) {
+              nextItem.templateId = selectedTemplateId;
+            } else {
+              delete nextItem.templateId;
+            }
+            return nextItem;
+          })
         : [
             {
               id: `tmp-mchk-${Date.now()}`,
@@ -906,7 +929,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
               date: selectedDate,
               slot,
               completed,
-              ...(templateId ? { templateId } : {}),
+              ...(selectedTemplateId ? { templateId: selectedTemplateId } : {}),
               createdAt: new Date().toISOString().slice(0, 10)
             },
             ...previous.mealCheckins
@@ -927,7 +950,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
         date: selectedDate,
         slot,
         completed,
-        ...(templateId ? { templateId } : {})
+        ...(selectedTemplateId ? { templateId: selectedTemplateId } : {})
       })
     });
 
@@ -1709,7 +1732,12 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                         {current ? <span className="slot-state">{current.completed ? "함" : "안함"}</span> : <span className="slot-state">미기록</span>}
                       </div>
                       <div className="slot-actions">
-                        <button type="button" className="button button-primary" onClick={() => void upsertMealCheckin(slot.value, true)}>
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          onClick={() => void upsertMealCheckin(slot.value, true)}
+                          disabled={slotTemplates.length === 0}
+                        >
                           함
                         </button>
                         <button type="button" className="button" onClick={() => void upsertMealCheckin(slot.value, false)}>

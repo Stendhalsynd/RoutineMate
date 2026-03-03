@@ -30,12 +30,43 @@ export async function PATCH(request: Request, context: RouteContext) {
       return notFound("Session was not found.");
     }
 
-    const updated = await repo.updateMealCheckin(session.userId, parsed.data.id, {
+    const currentRows = await repo.listMealCheckinsByUser(session.userId);
+    const current = currentRows.find((item) => item.id === parsed.data.id && item.isDeleted !== true);
+    if (!current) {
+      return notFound("Meal checkin was not found.");
+    }
+
+    const nextSlot = parsed.data.slot ?? current.slot;
+    const nextCompleted = parsed.data.completed ?? current.completed;
+    const nextTemplateId = nextCompleted
+      ? parsed.data.templateId ?? current.templateId
+      : undefined;
+
+    const templates = await repo.listMealTemplatesByUser(session.userId);
+    const slotTemplates = templates.filter((item) => item.isActive && item.mealSlot === nextSlot);
+    const selectedTemplate = nextTemplateId ? slotTemplates.find((item) => item.id === nextTemplateId) : undefined;
+
+    if (nextCompleted) {
+      if (!nextTemplateId || slotTemplates.length === 0) {
+        return badRequest("해당 슬롯의 활성 식단 템플릿이 필요합니다.");
+      }
+      if (!selectedTemplate) {
+        return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+      }
+    } else if (nextTemplateId && !selectedTemplate) {
+      return badRequest("선택한 식단 템플릿이 슬롯과 일치하지 않습니다.");
+    }
+
+    const updates: Partial<Pick<(typeof current), "date" | "slot" | "completed" | "templateId">> = {
       ...(parsed.data.date !== undefined ? { date: parsed.data.date } : {}),
       ...(parsed.data.slot !== undefined ? { slot: parsed.data.slot } : {}),
-      ...(parsed.data.completed !== undefined ? { completed: parsed.data.completed } : {}),
-      ...(parsed.data.templateId !== undefined ? { templateId: parsed.data.templateId } : {})
-    });
+      completed: nextCompleted
+    };
+    if (nextCompleted && selectedTemplate) {
+      updates.templateId = selectedTemplate.id;
+    }
+
+    const updated = await repo.updateMealCheckin(session.userId, parsed.data.id, updates);
 
     if (!updated) {
       return notFound("Meal checkin was not found.");
