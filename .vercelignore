@@ -1,0 +1,5 @@
+dist/
+*.apk
+apps/mobile/android/
+apps/mobile/.gradle/
+.omx/
