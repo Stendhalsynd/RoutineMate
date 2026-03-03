@@ -1,4 +1,4 @@
-import type { GoogleProfile } from "@routinemate/domain";
+import type { GoogleAuthMode, GoogleProfile } from "@routinemate/domain";
 
 type GooglePlatform = "web" | "android";
 
@@ -55,7 +55,11 @@ function parseTestToken(idToken: string): GoogleProfile | null {
   };
 }
 
-export async function verifyGoogleIdToken(idToken: string, platform: GooglePlatform): Promise<GoogleProfile> {
+export async function verifyGoogleIdToken(
+  idToken: string,
+  platform: GooglePlatform,
+  mode?: GoogleAuthMode
+): Promise<GoogleProfile> {
   const mocked = parseTestToken(idToken);
   if (mocked) {
     return mocked;
@@ -82,9 +86,24 @@ export async function verifyGoogleIdToken(idToken: string, platform: GooglePlatf
   }
 
   const audiences = allowedAudiences(platform);
-  if (audiences.length > 0) {
-    const audience = payload.aud ?? payload.azp ?? "";
-    if (!audience || !audiences.includes(audience)) {
+  if (platform === "android" && mode === "native_sdk") {
+    const webAudiences = allowedAudiences("web");
+    const androidAudiences = allowedAudiences("android");
+    const supportedAudiences = new Set([...audiences, ...webAudiences, ...androidAudiences]);
+    const audience = payload.aud ?? "";
+    const azp = payload.azp ?? "";
+
+    if (supportedAudiences.size > 0 && (!audience || !supportedAudiences.has(audience))) {
+      throw new Error("허용되지 않은 Google OAuth audience 입니다.");
+    }
+    if (azp && androidAudiences.length > 0 && !androidAudiences.includes(azp)) {
+      throw new Error("허용되지 않은 Google Android OAuth 클라이언트입니다.");
+    }
+  } else if (audiences.length > 0) {
+    const audience = payload.aud ?? "";
+    const azp = payload.azp ?? "";
+    const isMatched = audiences.includes(audience) || audiences.includes(azp);
+    if (!isMatched) {
       throw new Error("허용되지 않은 Google OAuth 클라이언트입니다.");
     }
   }
@@ -137,23 +156,6 @@ export async function exchangeGoogleAuthorizationCode({
   if (!response.ok || !payload.id_token) {
     const detail = payload.error_description?.trim();
     throw new Error(detail ? `Google code 교환에 실패했습니다. (${detail})` : "Google code 교환에 실패했습니다.");
-  }
-
-  return payload.id_token;
-}
-
-export function getGoogleWebClientId(): string {
-  const clientId =
-    process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
-    process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ||
-    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
-
-  if (!clientId) {
-    throw new Error("Google OAuth is not configured. Missing env: GOOGLE_WEB_CLIENT_ID");
-  }
-
-  return clientId;
-}
   }
 
   return payload.id_token;

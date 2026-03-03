@@ -1,7 +1,6 @@
 import { StatusBar } from "expo-status-bar";
-import * as AuthSession from "expo-auth-session";
 import * as Notifications from "expo-notifications";
-import * as WebBrowser from "expo-web-browser";
+import { GoogleSignin, isErrorWithCode, isSuccessResponse, statusCodes } from "@react-native-google-signin/google-signin";
 import {
   Pressable,
   SafeAreaView,
@@ -140,13 +139,8 @@ type Message = {
   text: string;
 };
 
-WebBrowser.maybeCompleteAuthSession();
-
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://routinemate-kohl.vercel.app";
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? "";
-const APP_SCHEME = "routinemate";
-const GOOGLE_ANDROID_REDIRECT_URI =
-  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_REDIRECT_URI?.trim() || `${APP_SCHEME}://oauth`;
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? "";
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -410,6 +404,15 @@ export default function App(): React.JSX.Element {
     }
     return styles.messageSuccess;
   }, [message]);
+
+  React.useEffect(() => {
+    if (!GOOGLE_WEB_CLIENT_ID) {
+      return;
+    }
+    GoogleSignin.configure({
+      webClientId: GOOGLE_WEB_CLIENT_ID
+    });
+  }, []);
 
   const sessionInfoText = React.useMemo(() => {
     if (!session) {
@@ -1127,77 +1130,30 @@ export default function App(): React.JSX.Element {
 
   const upgradeGoogleMobile = React.useCallback(async () => {
     try {
-      if (!GOOGLE_ANDROID_CLIENT_ID) {
-        setMessage({ type: "error", text: "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID가 필요합니다." });
+      if (!GOOGLE_WEB_CLIENT_ID) {
+        setMessage({ type: "error", text: "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID가 필요합니다." });
         return;
       }
-      if (__DEV__) {
-        console.info("[GoogleOAuth] starting auth request", {
-          clientId: GOOGLE_ANDROID_CLIENT_ID,
-          redirectUri: GOOGLE_ANDROID_REDIRECT_URI
-        });
-      }
-      const request = new AuthSession.AuthRequest({
-        clientId: GOOGLE_ANDROID_CLIENT_ID,
-        responseType: AuthSession.ResponseType.Code,
-        usePKCE: true,
-        scopes: ["openid", "email", "profile"],
-        redirectUri: GOOGLE_ANDROID_REDIRECT_URI,
-        extraParams: { prompt: "select_account" }
+      await GoogleSignin.hasPlayServices({
+        showPlayServicesUpdateDialog: true
       });
-
-      const authResult = (await request.promptAsync({
-        authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth"
-      })) as AuthSession.AuthSessionResult & {
-        params?: Record<string, string>;
-        errorCode?: string | null;
-        error?: string | { message?: string } | null;
-      };
-
-      if (authResult.type === "cancel" || authResult.type === "dismiss") {
-        setMessage({ type: "error", text: "Google 인증이 취소되었습니다." });
+      const signInResult = await GoogleSignin.signIn();
+      if (!isSuccessResponse(signInResult)) {
+        setMessage({ type: "info", text: "Google 인증이 취소되었습니다." });
         return;
       }
-      if (authResult.type === "error" || !authResult.params?.code) {
-        const detail = (authResult as { error?: { message?: string } | string; errorCode?: string | null }).error;
-        const errorText = typeof detail === "string" ? detail : detail?.message;
-        const oauthError = authResult.params?.error;
-        const oauthErrorDescription = authResult.params?.error_description;
-        const invalidRequestHint =
-          oauthError === "invalid_request"
-            ? ` Google Console의 Android OAuth 클라이언트(package: com.routinemate.app, SHA-1) 및 redirect_uri(${GOOGLE_ANDROID_REDIRECT_URI}) 설정을 확인하세요.`
-            : "";
-        if (__DEV__) {
-          console.error("[GoogleOAuth] auth request failed", {
-            type: authResult.type,
-            errorCode: authResult.errorCode,
-            oauthError,
-            oauthErrorDescription,
-            redirectUri: GOOGLE_ANDROID_REDIRECT_URI
-          });
-        }
-        setMessage({
-          type: "error",
-          text: `Google 인증에 실패했습니다${errorText ? ` (${errorText})` : ""}${
-            authResult.errorCode ? ` (${authResult.errorCode})` : ""
-          }${oauthError ? ` (${oauthError})` : ""}${oauthErrorDescription ? ` (${oauthErrorDescription})` : ""}${invalidRequestHint}`
-        });
+      const idToken = signInResult.data.idToken;
+      if (!idToken) {
+        setMessage({ type: "error", text: "Google idToken 획득에 실패했습니다." });
         return;
       }
-      if (!request.codeVerifier) {
-        setMessage({ type: "error", text: "Google PKCE verifier를 생성하지 못했습니다." });
-        return;
-      }
-
       const payload = await apiFetch<Session>(session ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
         method: "POST",
         body: JSON.stringify({
           ...(session ? { sessionId: session.sessionId } : {}),
-          authorizationCode: authResult.params.code,
-          codeVerifier: request.codeVerifier,
-          redirectUri: GOOGLE_ANDROID_REDIRECT_URI,
+          idToken,
           platform: "android",
-          mode: "auth_code_pkce"
+          mode: "native_sdk"
         })
       });
       setSession(payload);
@@ -1205,6 +1161,20 @@ export default function App(): React.JSX.Element {
       void refreshCoreSessionData();
       void loadTemplateCatalog();
     } catch (error) {
+      if (isErrorWithCode(error)) {
+        if (error.code === statusCodes.SIGN_IN_CANCELLED) {
+          setMessage({ type: "info", text: "Google 인증이 취소되었습니다." });
+          return;
+        }
+        if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+          setMessage({ type: "error", text: "Google Play 서비스를 사용할 수 없습니다." });
+          return;
+        }
+        if (error.code === statusCodes.IN_PROGRESS) {
+          setMessage({ type: "info", text: "Google 인증이 이미 진행 중입니다." });
+          return;
+        }
+      }
       setMessage({ type: "error", text: error instanceof Error ? error.message : "Google 전환 실패" });
     }
   }, [loadTemplateCatalog, refreshCoreSessionData, session]);
@@ -2070,16 +2040,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 68
-  },
-  secondaryButtonText: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: "700"
-  }
-});
     alignItems: "center",
     justifyContent: "center",
     minWidth: 68
