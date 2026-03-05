@@ -73,7 +73,7 @@ export function buildMetricChartLayout(
   const plotHeight = Math.max(1, safeHeight - safePadding.top - safePadding.bottom);
 
   const coords = points.map((point, index) => {
-    const ratio = total === 1 ? 0 : index / Math.max(total - 1, 1);
+    const ratio = total === 1 ? 0.5 : index / Math.max(total - 1, 1);
     const rawX = safePadding.left + ratio * plotWidth;
     const x = Math.min(
       Math.max(rawX, safePadding.left),

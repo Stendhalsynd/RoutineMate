@@ -28,6 +28,7 @@ test("metric chart path generation stays finite for single-point and empty-point
   const single = buildMetricChartLayout([{ date: "2026-03-01", value: 69.9 }], 280);
   assert.equal(single.coords.length, 1);
   assert.equal(single.linePath.startsWith("M"), true);
+  assert.equal(single.coords[0]?.x, (single.width - single.padding.left - single.padding.right) / 2 + single.padding.left);
 
   const empty = buildMetricChartLayout([], 320);
   assert.equal(empty.coords.length, 0);
