@@ -337,6 +337,15 @@ keytool -list -v -keystore /path/to/your-release.keystore -alias YOUR_ALIAS
 - UTC 경계 누락 방지를 위해 대시보드 호출 시 `date=YYYY-MM-DD`를 함께 전달합니다.
 - 모바일 클라이언트는 `todayYmd()` 기준 `GET /v1/dashboard?...&date=...`를 기본 호출로 사용합니다.
 
+### 세션 유지 정책
+- `routinemate_session_id` 쿠키 만료는 90일로 유지됩니다.
+- 환경에 따라 쿠키 `Secure` 플래그가 결정됩니다.
+- 복구 순서는 쿠키 → `sessionId` 쿼리 → `signInSilently` 순입니다.
+
+### UI 동작 메모
+- 상단에는 Google 연결 상태 라벨이 과도하게 반복 노출되지 않도록 조정되어 있습니다.
+- 모바일은 상단 고정 탭이 아닌 사이드 메뉴(햄버거)로 이동성능을 확보합니다.
+
 ### 세션 복구 우선순위
 1. `GET /v1/auth/session` (쿠키)
 2. `GET /v1/auth/session?sessionId=...` (SecureStore fallback)

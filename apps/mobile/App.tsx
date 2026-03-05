@@ -8,6 +8,8 @@ import {
   statusCodes
 } from "@react-native-google-signin/google-signin";
 import {
+  Animated,
+  Easing,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -16,20 +18,37 @@ import {
   TextInput,
   Modal,
   FlatList,
+  PanResponder,
   Platform,
   StatusBar as RNStatusBar,
   View,
-  useWindowDimensions,
-  type KeyboardTypeOptions
+  type KeyboardTypeOptions,
+  type LayoutChangeEvent
 } from "react-native";
 import * as React from "react";
 import { cardRadius, colors, spacing } from "@routinemate/ui";
 import { LineChart } from "react-native-chart-kit";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { clearStoredSessionId, persistSessionId, readStoredSessionId } from "./src/lib/session-store";
+import { computeMetricChartWidth } from "./src/lib/metric-chart-width";
+import {
+  buildDecimalValue,
+  buildFractionDigitOptions,
+  buildIntegerRangeOptions,
+  splitDecimalValue,
+  type PickerOption as DecimalPickerOption
+} from "./src/lib/decimal-picker";
+import { isTransientNetworkError, toUserFacingErrorMessage } from "./src/lib/api-error";
 
 const ChartLine = LineChart as unknown as React.ComponentType<any>;
 
 type TabKey = "dashboard" | "records" | "settings";
+
+const NAV_ITEMS: ReadonlyArray<{ key: TabKey; label: string }> = [
+  { key: "dashboard", label: "대시보드" },
+  { key: "records", label: "기록" },
+  { key: "settings", label: "설정" }
+];
 
 type Session = {
   sessionId: string;
@@ -161,6 +180,10 @@ type Message = {
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://routinemate-kohl.vercel.app";
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? "";
+const MOBILE_MENU_WIDTH = 292;
+const MOBILE_MENU_EDGE_SWIPE = 24;
+const WEIGHT_RANGE = { min: 65, max: 95 };
+const BODY_FAT_RANGE = { min: 5, max: 35 };
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -213,14 +236,19 @@ Notifications.setNotificationHandler({
 });
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: "include",
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: "include",
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    throw new Error(toUserFacingErrorMessage(error, "요청에 실패했습니다."));
+  }
 
   const payload = (await response.json().catch(() => null)) as { data?: T; error?: { message?: string } } | null;
   if (!response.ok) {
@@ -249,9 +277,13 @@ function defaultWorkoutBySlot(slot: WorkoutSlot): {
 
 function todayYmd(): string {
   const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
+  return toYmd(now);
+}
+
+function toYmd(value: Date): string {
+  const yyyy = value.getFullYear();
+  const mm = String(value.getMonth() + 1).padStart(2, "0");
+  const dd = String(value.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -306,6 +338,17 @@ type OptionPickerState = {
   onSelect: (value: string) => void;
 };
 
+type DecimalPickerState = {
+  title: string;
+  unit: "kg" | "%";
+  integerOptions: DecimalPickerOption[];
+  fractionOptions: DecimalPickerOption[];
+  integerValue: string;
+  fractionValue: string;
+  allowEmpty: boolean;
+  onSelect: (value: string) => void;
+};
+
 function buildDateOptions(daysBack: number, daysForward: number): PickerOption[] {
   const base = new Date();
   base.setHours(0, 0, 0, 0);
@@ -333,15 +376,6 @@ function buildTimeOptions(stepMinutes = 5): PickerOption[] {
   return options;
 }
 
-function buildDecimalOptions(min: number, max: number, step: number, unit: string): PickerOption[] {
-  const options: PickerOption[] = [];
-  for (let current = min; current <= max + 0.00001; current += step) {
-    const value = current.toFixed(1);
-    options.push({ value, label: `${value}${unit}` });
-  }
-  return options;
-}
-
 function buildIntegerOptions(min: number, max: number, unit = ""): PickerOption[] {
   const options: PickerOption[] = [];
   for (let current = min; current <= max; current += 1) {
@@ -356,10 +390,9 @@ type MetricLineChartProps = {
   unit: string;
   color: string;
   points: Array<{ date: string; value: number }>;
-  width: number;
 };
 
-function MetricLineChart({ title, unit, color, points, width }: MetricLineChartProps): React.JSX.Element {
+function MetricLineChart({ title, unit, color, points }: MetricLineChartProps): React.JSX.Element {
   if (points.length === 0) {
     return (
       <View style={styles.metricCard}>
@@ -376,6 +409,12 @@ function MetricLineChart({ title, unit, color, points, width }: MetricLineChartP
   const latest = points[points.length - 1]?.value;
   const firstDate = points[0]?.date ?? "";
   const lastDate = points[points.length - 1]?.date ?? "";
+  const [chartWidth, setChartWidth] = React.useState(0);
+
+  const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = computeMetricChartWidth(event.nativeEvent.layout.width);
+    setChartWidth((current) => (current === nextWidth ? current : nextWidth));
+  }, []);
 
   return (
     <View style={styles.metricCard}>
@@ -383,39 +422,43 @@ function MetricLineChart({ title, unit, color, points, width }: MetricLineChartP
         <Text style={styles.sectionSubTitle}>{title}</Text>
         <Text style={styles.metricLatest}>{latest !== undefined ? `${latest.toFixed(1)}${unit}` : "--"}</Text>
       </View>
-      <ChartLine
-        data={{
-          labels,
-          datasets: [{ data: values, color: () => color, strokeWidth: 2.5 }]
-        }}
-        width={width}
-        height={180}
-        withInnerLines
-        withOuterLines={false}
-        withVerticalLines={false}
-        withHorizontalLabels
-        withVerticalLabels
-        fromZero={false}
-        segments={4}
-        bezier={points.length >= 3}
-        chartConfig={{
-          backgroundGradientFrom: "#fbfcfd",
-          backgroundGradientTo: "#fbfcfd",
-          decimalPlaces: 1,
-          color: () => color,
-          labelColor: () => colors.textSecondary,
-          propsForDots: {
-            r: "3",
-            strokeWidth: "1",
-            stroke: color
-          },
-          propsForBackgroundLines: {
-            stroke: "#d8dde1",
-            strokeWidth: 1
-          }
-        }}
-        style={styles.metricChart}
-      />
+      <View style={styles.metricChartWrap} onLayout={handleLayout}>
+        {chartWidth > 0 ? (
+          <ChartLine
+            data={{
+              labels,
+              datasets: [{ data: values, color: () => color, strokeWidth: 2.5 }]
+            }}
+            width={chartWidth}
+            height={180}
+            withInnerLines
+            withOuterLines={false}
+            withVerticalLines={false}
+            withHorizontalLabels
+            withVerticalLabels
+            fromZero={false}
+            segments={4}
+            bezier={points.length >= 3}
+            chartConfig={{
+              backgroundGradientFrom: "#fbfcfd",
+              backgroundGradientTo: "#fbfcfd",
+              decimalPlaces: 1,
+              color: () => color,
+              labelColor: () => colors.textSecondary,
+              propsForDots: {
+                r: "3",
+                strokeWidth: "1",
+                stroke: color
+              },
+              propsForBackgroundLines: {
+                stroke: "#d8dde1",
+                strokeWidth: 1
+              }
+            }}
+            style={styles.metricChart}
+          />
+        ) : null}
+      </View>
       <Text style={styles.metricRangeText}>
         {firstDate} ~ {lastDate}
       </Text>
@@ -495,8 +538,8 @@ function SelectRow({
 }
 
 export default function App(): React.JSX.Element {
-  const { width: viewportWidth } = useWindowDimensions();
   const [tab, setTab] = React.useState<TabKey>("dashboard");
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [session, setSession] = React.useState<Session | null>(null);
   const [message, setMessage] = React.useState<Message | null>(null);
 
@@ -557,23 +600,24 @@ export default function App(): React.JSX.Element {
     timezone: DEFAULT_REMINDER_TIMEZONE
   });
   const [optionPicker, setOptionPicker] = React.useState<OptionPickerState | null>(null);
+  const [decimalPicker, setDecimalPicker] = React.useState<DecimalPickerState | null>(null);
+  const [isDdayPickerVisible, setDdayPickerVisible] = React.useState(false);
+  const [ddayPickerDate, setDdayPickerDate] = React.useState<Date>(new Date());
+  const menuTranslateX = React.useRef(new Animated.Value(-MOBILE_MENU_WIDTH)).current;
+  const menuScrimOpacity = React.useMemo(
+    () =>
+      menuTranslateX.interpolate({
+        inputRange: [-MOBILE_MENU_WIDTH, 0],
+        outputRange: [0, 1],
+        extrapolate: "clamp"
+      }),
+    [menuTranslateX]
+  );
 
   const dateOptions = React.useMemo(() => buildDateOptions(365, 365), []);
-  const ddayOptions = React.useMemo(
-    () => [{ value: "", label: "미설정" }, ...buildDateOptions(0, 1095)],
-    []
-  );
   const timeOptions = React.useMemo(() => buildTimeOptions(5), []);
   const weeklyTargetOptions = React.useMemo(() => buildIntegerOptions(1, 21, "회"), []);
-  const weightOptions = React.useMemo(
-    () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(30, 200, 0.1, "kg")],
-    []
-  );
-  const bodyFatOptions = React.useMemo(
-    () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(3, 60, 0.1, "%")],
-    []
-  );
-  const chartWidth = React.useMemo(() => Math.max(250, viewportWidth - 86), [viewportWidth]);
+  const decimalFractionOptions = React.useMemo(() => buildFractionDigitOptions(), []);
   const weightTrendPoints = React.useMemo(
     () =>
       (dashboard?.bodyMetricTrend ?? [])
@@ -656,40 +700,157 @@ export default function App(): React.JSX.Element {
     return `세션: ${session.sessionId.slice(0, 10)}...`;
   }, [session]);
 
+  const runMenuAnimation = React.useCallback(
+    (toValue: number, onComplete?: () => void) => {
+      Animated.timing(menuTranslateX, {
+        toValue,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }).start(({ finished }) => {
+        if (finished) {
+          onComplete?.();
+        }
+      });
+    },
+    [menuTranslateX]
+  );
+
+  const openMenu = React.useCallback(() => {
+    setIsMenuOpen(true);
+    requestAnimationFrame(() => {
+      runMenuAnimation(0);
+    });
+  }, [runMenuAnimation]);
+
+  const closeMenu = React.useCallback(() => {
+    runMenuAnimation(-MOBILE_MENU_WIDTH, () => {
+      setIsMenuOpen(false);
+      menuTranslateX.setValue(-MOBILE_MENU_WIDTH);
+    });
+  }, [menuTranslateX, runMenuAnimation]);
+
+  const closeMenuImmediately = React.useCallback(() => {
+    menuTranslateX.setValue(-MOBILE_MENU_WIDTH);
+    setIsMenuOpen(false);
+  }, [menuTranslateX]);
+
+  const menuDragResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          isMenuOpen &&
+          Math.abs(gestureState.dx) > 6 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+        onPanResponderMove: (_event, gestureState) => {
+          if (!isMenuOpen) {
+            return;
+          }
+          const nextOffset = Math.max(-MOBILE_MENU_WIDTH, Math.min(0, gestureState.dx));
+          menuTranslateX.setValue(nextOffset);
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          if (gestureState.dx < -MOBILE_MENU_WIDTH * 0.3 || gestureState.vx < -0.75) {
+            closeMenu();
+            return;
+          }
+          runMenuAnimation(0);
+        },
+        onPanResponderTerminate: () => {
+          runMenuAnimation(0);
+        }
+      }),
+    [closeMenu, isMenuOpen, menuTranslateX, runMenuAnimation]
+  );
+
+  const edgeSwipeResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          !isMenuOpen &&
+          gestureState.moveX <= MOBILE_MENU_EDGE_SWIPE &&
+          gestureState.dx > 6 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+        onPanResponderGrant: () => {
+          setIsMenuOpen(true);
+          menuTranslateX.setValue(-MOBILE_MENU_WIDTH);
+        },
+        onPanResponderMove: (_event, gestureState) => {
+          const revealed = Math.max(0, gestureState.dx);
+          menuTranslateX.setValue(Math.max(-MOBILE_MENU_WIDTH, Math.min(0, -MOBILE_MENU_WIDTH + revealed)));
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          if (gestureState.dx > MOBILE_MENU_WIDTH * 0.35 || gestureState.vx > 0.85) {
+            runMenuAnimation(0);
+            return;
+          }
+          closeMenuImmediately();
+        },
+        onPanResponderTerminate: () => {
+          closeMenuImmediately();
+        }
+      }),
+    [closeMenuImmediately, isMenuOpen, menuTranslateX, runMenuAnimation]
+  );
+
+  const navigateWithMenu = React.useCallback(
+    (nextTab: TabKey) => {
+      setTab(nextTab);
+      closeMenu();
+    },
+    [closeMenu]
+  );
+
   const refreshCoreSessionData = React.useCallback(async (fresh = false) => {
     if (!session) {
       return;
     }
 
-    try {
-      setIsSyncing(true);
+    const fetchCoreData = async (freshFlag: boolean) => {
       const dashboardDate = todayYmd();
-      const freshSuffix = fresh ? "&fresh=1" : "";
+      const freshSuffix = freshFlag ? "&fresh=1" : "";
       const [dashboardData, goalData, reminderSettingsData] = await Promise.all([
         apiFetch<Dashboard>(
           `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}&date=${encodeURIComponent(dashboardDate)}${freshSuffix}`
         ),
         apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(session.sessionId)}`),
-        apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`).then(
-          (payload: { settings: ReminderSettings | null }) => payload
-        )
+        apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`)
       ]);
 
-      setDashboard(dashboardData ?? null);
-      if (dashboardData) {
-        dashboardCacheRef.current[range] = dashboardData;
+      return {
+        dashboardDate,
+        dashboardData,
+        goalData,
+        reminderSettingsData
+      };
+    };
+
+    const applyCoreData = (result: {
+      dashboardData: Dashboard;
+      goalData: { goal: Goal | null };
+      reminderSettingsData: { settings: ReminderSettings | null };
+    }) => {
+      setDashboard(result.dashboardData ?? null);
+      if (result.dashboardData) {
+        dashboardCacheRef.current[range] = result.dashboardData;
       }
-      setGoal(goalData?.goal ?? null);
-      if (reminderSettingsData?.settings) {
-        setReminder(reminderSettingsData.settings);
+      setGoal(result.goalData?.goal ?? null);
+      if (result.reminderSettingsData?.settings) {
+        setReminder(result.reminderSettingsData.settings);
       }
 
       if (!isGoalDraftDirty) {
-        setGoalTarget(String(goalData?.goal?.weeklyRoutineTarget ?? 4));
-        setGoalWeight(goalData?.goal?.targetWeightKg?.toString() ?? "");
-        setGoalFat(goalData?.goal?.targetBodyFat?.toString() ?? "");
-        setGoalDday(goalData?.goal?.dDay ?? "");
+        setGoalTarget(String(result.goalData?.goal?.weeklyRoutineTarget ?? 4));
+        setGoalWeight(result.goalData?.goal?.targetWeightKg?.toString() ?? "");
+        setGoalFat(result.goalData?.goal?.targetBodyFat?.toString() ?? "");
+        setGoalDday(result.goalData?.goal?.dDay ?? "");
       }
+    };
+
+    try {
+      setIsSyncing(true);
+      const result = await fetchCoreData(fresh);
+      applyCoreData(result);
 
       if (!fresh) {
         const candidateRanges: Array<"7d" | "30d" | "90d"> = ["7d", "30d", "90d"];
@@ -698,7 +859,7 @@ export default function App(): React.JSX.Element {
             continue;
           }
           void apiFetch<Dashboard>(
-            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}&date=${encodeURIComponent(dashboardDate)}`
+            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}&date=${encodeURIComponent(result.dashboardDate)}`
           )
             .then((next) => {
               dashboardCacheRef.current[candidate] = next;
@@ -709,7 +870,25 @@ export default function App(): React.JSX.Element {
         }
       }
     } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "조회에 실패했습니다." });
+      if (isTransientNetworkError(error)) {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          const retryResult = await fetchCoreData(fresh);
+          applyCoreData(retryResult);
+          setMessage({ type: "info", text: "네트워크 연결이 불안정해 다시 동기화했습니다." });
+          return;
+        } catch (retryError) {
+          setMessage({
+            type: "error",
+            text: toUserFacingErrorMessage(retryError, "조회에 실패했습니다.")
+          });
+          return;
+        }
+      }
+      setMessage({
+        type: "error",
+        text: toUserFacingErrorMessage(error, "조회에 실패했습니다.")
+      });
     } finally {
       setIsSyncing(false);
     }
@@ -728,7 +907,7 @@ export default function App(): React.JSX.Element {
       setMealTemplates(mealTemplatesData.templates ?? []);
       setWorkoutTemplates(workoutTemplatesData.templates ?? []);
     } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "템플릿 조회에 실패했습니다." });
+      setMessage({ type: "error", text: toUserFacingErrorMessage(error, "템플릿 조회에 실패했습니다.") });
     }
   }, [session]);
 
@@ -750,7 +929,7 @@ export default function App(): React.JSX.Element {
         setDay(dayData ?? defaultDay(date));
         setReminderEvaluation(reminderEvaluationData ?? { date, mealCount: 0, workoutCount: 0, isMissingLogCandidate: false });
       } catch (error) {
-        setMessage({ type: "error", text: error instanceof Error ? error.message : "날짜 기록을 불러오지 못했습니다." });
+        setMessage({ type: "error", text: toUserFacingErrorMessage(error, "날짜 기록을 불러오지 못했습니다.") });
       } finally {
         setIsSyncing(false);
       }
@@ -831,9 +1010,14 @@ export default function App(): React.JSX.Element {
           await persistSessionId(googleSession.sessionId);
           setMessage({ type: "success", text: "Google 세션이 복원되었습니다." });
         }
-      } catch {
+      } catch (error) {
         if (mounted) {
-          setMessage({ type: "info", text: "Google 로그인 후 데이터 동기화를 시작할 수 있습니다." });
+          setMessage({
+            type: "info",
+            text: isTransientNetworkError(error)
+              ? "네트워크 상태를 확인한 뒤 다시 시도해 주세요."
+              : "Google 로그인 후 데이터 동기화를 시작할 수 있습니다."
+          });
         }
       }
     };
@@ -1503,6 +1687,86 @@ export default function App(): React.JSX.Element {
     setOptionPicker(null);
   }, []);
 
+  const closeDecimalPicker = React.useCallback(() => {
+    setDecimalPicker(null);
+  }, []);
+
+  const openDecimalPicker = React.useCallback(
+    ({
+      title,
+      value,
+      unit,
+      min,
+      max,
+      allowEmpty,
+      onSelect
+    }: {
+      title: string;
+      value: string;
+      unit: "kg" | "%";
+      min: number;
+      max: number;
+      allowEmpty: boolean;
+      onSelect: (value: string) => void;
+    }) => {
+      const parsed = splitDecimalValue(value, min);
+      const parsedInteger = Number(parsed.integerPart);
+      const integerValue = Number.isFinite(parsedInteger)
+        ? String(Math.max(min, Math.min(max, Math.trunc(parsedInteger))))
+        : String(min);
+      const fractionValue = /^\d$/.test(parsed.fractionPart) ? parsed.fractionPart : "0";
+      setDecimalPicker({
+        title,
+        unit,
+        integerOptions: buildIntegerRangeOptions(min, max),
+        fractionOptions: decimalFractionOptions,
+        integerValue,
+        fractionValue,
+        allowEmpty,
+        onSelect
+      });
+    },
+    [decimalFractionOptions]
+  );
+
+  const applyDecimalPickerValue = React.useCallback(() => {
+    if (!decimalPicker) {
+      return;
+    }
+    const nextValue = buildDecimalValue(decimalPicker.integerValue, decimalPicker.fractionValue);
+    decimalPicker.onSelect(nextValue);
+    closeDecimalPicker();
+  }, [closeDecimalPicker, decimalPicker]);
+
+  const clearDecimalPickerValue = React.useCallback(() => {
+    if (!decimalPicker) {
+      return;
+    }
+    decimalPicker.onSelect("");
+    closeDecimalPicker();
+  }, [closeDecimalPicker, decimalPicker]);
+
+  const openDdayPicker = React.useCallback(() => {
+    const base = goalDday ? new Date(goalDday) : new Date();
+    setDdayPickerDate(Number.isNaN(base.getTime()) ? new Date() : base);
+    setDdayPickerVisible(true);
+  }, [goalDday]);
+
+  const onDdayPickerChange = React.useCallback(
+    (event: DateTimePickerEvent, selected?: Date) => {
+      if (Platform.OS === "android") {
+        setDdayPickerVisible(false);
+      }
+      if (event.type === "dismissed" || !selected) {
+        return;
+      }
+      setDdayPickerDate(selected);
+      setGoalDraftDirty(true);
+      setGoalDday(toYmd(selected));
+    },
+    []
+  );
+
   const saveReminder = React.useCallback(async () => {
     if (!session) {
       setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
@@ -1538,7 +1802,7 @@ export default function App(): React.JSX.Element {
       }
       setMessage({ type: "success", text: "리마인더 설정을 저장했습니다." });
     } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "리마인더 저장 실패" });
+      setMessage({ type: "error", text: toUserFacingErrorMessage(error, "리마인더 저장 실패") });
     }
   }, [reminder, session]);
 
@@ -1591,51 +1855,70 @@ export default function App(): React.JSX.Element {
           return;
         }
       }
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "Google 로그인 실패" });
+      setMessage({ type: "error", text: toUserFacingErrorMessage(error, "Google 로그인 실패") });
     }
   }, [loadTemplateCatalog, refreshCoreSessionData, session]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: statusBarOffset }]}>
       <StatusBar style="dark" />
+      <View style={styles.menuEdgeGestureZone} {...edgeSwipeResponder.panHandlers} />
+      <Modal visible={isMenuOpen} transparent animationType="none" onRequestClose={closeMenu}>
+        <View style={styles.menuOverlay}>
+          <Pressable style={styles.menuScrimPressable} onPress={closeMenu}>
+            <Animated.View style={[styles.menuScrim, { opacity: menuScrimOpacity }]} />
+          </Pressable>
+          <Animated.View style={[styles.menuPanel, { transform: [{ translateX: menuTranslateX }] }]} {...menuDragResponder.panHandlers}>
+            <View style={styles.menuHeader}>
+              <Text style={styles.menuTitle}>메뉴</Text>
+            </View>
+            {NAV_ITEMS.map((item) => (
+              <Pressable
+                key={item.key}
+                style={[styles.menuItem, tab === item.key && styles.menuItemActive]}
+                onPress={() => navigateWithMenu(item.key)}
+              >
+                <Text style={[styles.menuItemText, tab === item.key && styles.menuItemTextActive]}>{item.label}</Text>
+              </Pressable>
+            ))}
+            <View style={styles.menuDivider} />
+            <Pressable
+              style={styles.menuGoogleAction}
+              onPress={() => {
+                closeMenu();
+                void upgradeGoogleMobile();
+              }}
+            >
+              <Text style={styles.menuGoogleActionTitle}>
+                {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
+              </Text>
+              <Text style={styles.menuGoogleActionSub}>
+                {session?.authProvider === "google" ? "연결된 계정으로 세션 복구/재인증" : "Google 계정으로 데이터 동기화 시작"}
+              </Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      </Modal>
+
       <View style={styles.topBar}>
-        <View>
+        <Pressable
+          onPress={() => setTab("dashboard")}
+          style={styles.brandButton}
+          accessibilityRole="button"
+          accessibilityLabel="대시보드로 이동"
+        >
           <Text style={styles.brand}>RoutineMate</Text>
           <Text style={styles.topBarSub}>{sessionInfoText}</Text>
-        </View>
+        </Pressable>
         <View style={styles.topActions}>
-          <Pressable style={styles.topPrimaryButton} onPress={upgradeGoogleMobile}>
-            <Text style={styles.topPrimaryButtonText}>
-              {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
-            </Text>
+          <Pressable style={styles.menuButton} onPress={openMenu}>
+            <Text style={styles.menuButtonText}>☰</Text>
           </Pressable>
-          <View style={styles.sessionBadge}>
-            <Text style={styles.sessionBadgeText}>{isSyncing ? "동기화 중..." : "동기화 완료"}</Text>
-          </View>
         </View>
-      </View>
-
-      <View style={styles.tabRow}>
-        {([
-          ["dashboard", "대시보드"],
-          ["records", "기록"],
-          ["settings", "설정"]
-        ] as Array<[TabKey, string]>).map(([key, label]) => (
-          <Pressable
-            key={key}
-            style={[styles.tabButton, tab === key && styles.tabButtonActive]}
-            onPress={() => setTab(key)}
-          >
-            <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
-          </Pressable>
-        ))}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={messageTextStyle}>{message?.text ?? ""}</Text>
-        <Text style={styles.hint}>
-          상태: {session?.authProvider === "google" ? `Google 연결됨 (${session.email ?? "이메일 없음"})` : "Google 로그인 필요"}
-        </Text>
 
         {tab === "dashboard" ? (
           <View style={styles.card}>
@@ -1673,9 +1956,6 @@ export default function App(): React.JSX.Element {
                 </Text>
               </Pressable>
             </View>
-            <Text style={styles.hint}>
-              현재 기준: {range === "7d" ? "Day" : range === "30d" ? "Week" : "Month"} {isSyncing ? "(동기화 중)" : ""}
-            </Text>
             <View style={styles.kpiRow}>
               <View style={styles.kpiCard}>
                 <Text style={styles.kpiLabel}>체크인율</Text>
@@ -1706,10 +1986,18 @@ export default function App(): React.JSX.Element {
             </View>
             <View style={styles.metricPanel}>
               <Text style={styles.sectionSubTitle}>체성분 추세 (전체 기록)</Text>
-              <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} width={chartWidth} />
-              <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} width={chartWidth} />
+              <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} />
+              <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} />
             </View>
-            {goal ? <Text style={styles.hint}>현재 목표: 주 {goal.weeklyRoutineTarget}회</Text> : <Text style={styles.hint}>현재 목표: 미설정</Text>}
+            {goal ? (
+              <Text style={styles.hint}>
+                현재 목표: 주 {goal.weeklyRoutineTarget}회 / 체중{" "}
+                {goal.targetWeightKg !== undefined ? `${goal.targetWeightKg}kg` : "-"} / 체지방{" "}
+                {goal.targetBodyFat !== undefined ? `${goal.targetBodyFat}%` : "-"}
+              </Text>
+            ) : (
+              <Text style={styles.hint}>현재 목표: 미설정</Text>
+            )}
             <Text style={styles.hint}>최근 체중 {dashboard?.latestWeightKg ?? "-"}kg / 체지방 {dashboard?.latestBodyFatPct ?? "-"}%</Text>
           </View>
         ) : null}
@@ -1852,22 +2140,36 @@ export default function App(): React.JSX.Element {
             <PickerField
               label="체중(kg)"
               value={weightForm}
-              placeholder="예: 70.0"
+              placeholder="65.0 ~ 95.9"
               onPress={() =>
-                openOptionPicker("체중 선택", weightOptions, weightForm, (value) => {
-                  setWeightForm(value);
-                  closeOptionPicker();
+                openDecimalPicker({
+                  title: "체중 선택",
+                  value: weightForm,
+                  unit: "kg",
+                  min: WEIGHT_RANGE.min,
+                  max: WEIGHT_RANGE.max,
+                  allowEmpty: true,
+                  onSelect: (value) => {
+                    setWeightForm(value);
+                  }
                 })
               }
             />
             <PickerField
               label="체지방(%)"
               value={bodyFatForm}
-              placeholder="예: 18.5"
+              placeholder="5.0 ~ 35.9"
               onPress={() =>
-                openOptionPicker("체지방 선택", bodyFatOptions, bodyFatForm, (value) => {
-                  setBodyFatForm(value);
-                  closeOptionPicker();
+                openDecimalPicker({
+                  title: "체지방 선택",
+                  value: bodyFatForm,
+                  unit: "%",
+                  min: BODY_FAT_RANGE.min,
+                  max: BODY_FAT_RANGE.max,
+                  allowEmpty: true,
+                  onSelect: (value) => {
+                    setBodyFatForm(value);
+                  }
                 })
               }
             />
@@ -1951,10 +2253,17 @@ export default function App(): React.JSX.Element {
               value={goalWeight}
               placeholder="목표 체중(kg)"
               onPress={() =>
-                openOptionPicker("목표 체중 선택", weightOptions, goalWeight, (value) => {
-                  setGoalDraftDirty(true);
-                  setGoalWeight(value);
-                  closeOptionPicker();
+                openDecimalPicker({
+                  title: "목표 체중 선택",
+                  value: goalWeight,
+                  unit: "kg",
+                  min: WEIGHT_RANGE.min,
+                  max: WEIGHT_RANGE.max,
+                  allowEmpty: true,
+                  onSelect: (value) => {
+                    setGoalDraftDirty(true);
+                    setGoalWeight(value);
+                  }
                 })
               }
             />
@@ -1963,10 +2272,17 @@ export default function App(): React.JSX.Element {
               value={goalFat}
               placeholder="목표 체지방(%)"
               onPress={() =>
-                openOptionPicker("목표 체지방 선택", bodyFatOptions, goalFat, (value) => {
-                  setGoalDraftDirty(true);
-                  setGoalFat(value);
-                  closeOptionPicker();
+                openDecimalPicker({
+                  title: "목표 체지방 선택",
+                  value: goalFat,
+                  unit: "%",
+                  min: BODY_FAT_RANGE.min,
+                  max: BODY_FAT_RANGE.max,
+                  allowEmpty: true,
+                  onSelect: (value) => {
+                    setGoalDraftDirty(true);
+                    setGoalFat(value);
+                  }
                 })
               }
             />
@@ -1974,14 +2290,36 @@ export default function App(): React.JSX.Element {
               label="D-Day"
               value={goalDday}
               placeholder="YYYY-MM-DD"
-              onPress={() =>
-                openOptionPicker("D-Day 선택", ddayOptions, goalDday, (value) => {
-                  setGoalDraftDirty(true);
-                  setGoalDday(value);
-                  closeOptionPicker();
-                })
-              }
+              onPress={openDdayPicker}
             />
+            <View style={styles.inlineActionRow}>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => {
+                  setGoalDraftDirty(true);
+                  setGoalDday("");
+                  setDdayPickerVisible(false);
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>D-Day 해제</Text>
+              </Pressable>
+            </View>
+            {isDdayPickerVisible ? (
+              <View style={styles.datePickerWrap}>
+                <DateTimePicker
+                  value={ddayPickerDate}
+                  mode="date"
+                  minimumDate={new Date()}
+                  display={Platform.OS === "ios" ? "inline" : "default"}
+                  onChange={onDdayPickerChange}
+                />
+                {Platform.OS === "ios" ? (
+                  <Pressable style={styles.secondaryButton} onPress={() => setDdayPickerVisible(false)}>
+                    <Text style={styles.secondaryButtonText}>완료</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
             <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveGoal}>
               <Text style={styles.primaryButtonText}>목표 저장</Text>
             </Pressable>
@@ -2254,17 +2592,6 @@ export default function App(): React.JSX.Element {
               <Text style={styles.primaryButtonText}>리마인더 저장</Text>
             </Pressable>
 
-            <Text style={styles.sectionTitle}>Google 로그인</Text>
-            <Text style={styles.hint}>
-              {session?.authProvider === "google"
-                ? `현재 상태: Google 연결됨 (${session.email ?? "이메일 없음"})`
-                : "현재 상태: Google 로그인 필요"}
-            </Text>
-            <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={upgradeGoogleMobile}>
-              <Text style={styles.primaryButtonText}>
-                {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
-              </Text>
-            </Pressable>
           </View>
         ) : null}
 
@@ -2277,6 +2604,85 @@ export default function App(): React.JSX.Element {
           </View>
         ) : null}
       </ScrollView>
+
+      <Modal visible={Boolean(decimalPicker)} transparent animationType="slide" onRequestClose={closeDecimalPicker}>
+        <View style={styles.pickerBackdrop}>
+          <Pressable style={styles.pickerBackdropDismiss} onPress={closeDecimalPicker} />
+          <View style={styles.pickerSheet}>
+            <Text style={styles.pickerTitle}>{decimalPicker?.title ?? ""}</Text>
+            <Text style={styles.pickerPreviewText}>
+              현재 선택:{" "}
+              {decimalPicker ? `${buildDecimalValue(decimalPicker.integerValue, decimalPicker.fractionValue)}${decimalPicker.unit}` : "-"}
+            </Text>
+            <View style={styles.decimalColumnRow}>
+              <View style={styles.decimalColumn}>
+                <Text style={styles.decimalColumnLabel}>정수</Text>
+                <FlatList
+                  data={decimalPicker?.integerOptions ?? []}
+                  keyExtractor={(item) => `int-${item.value}`}
+                  style={styles.decimalList}
+                  contentContainerStyle={styles.pickerListContent}
+                  initialNumToRender={20}
+                  renderItem={({ item }) => (
+                    <Pressable
+                      style={[styles.pickerOption, decimalPicker?.integerValue === item.value && styles.pickerOptionActive]}
+                      onPress={() =>
+                        setDecimalPicker((current) => (current ? { ...current, integerValue: item.value } : current))
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          decimalPicker?.integerValue === item.value && styles.pickerOptionTextActive
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  )}
+                />
+              </View>
+              <View style={styles.decimalColumn}>
+                <Text style={styles.decimalColumnLabel}>소수</Text>
+                <FlatList
+                  data={decimalPicker?.fractionOptions ?? []}
+                  keyExtractor={(item) => `frac-${item.value}`}
+                  style={styles.decimalList}
+                  contentContainerStyle={styles.pickerListContent}
+                  initialNumToRender={10}
+                  renderItem={({ item }) => (
+                    <Pressable
+                      style={[styles.pickerOption, decimalPicker?.fractionValue === item.value && styles.pickerOptionActive]}
+                      onPress={() =>
+                        setDecimalPicker((current) => (current ? { ...current, fractionValue: item.value } : current))
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          decimalPicker?.fractionValue === item.value && styles.pickerOptionTextActive
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  )}
+                />
+              </View>
+            </View>
+            <View style={styles.pickerActionRow}>
+              {decimalPicker?.allowEmpty ? (
+                <Pressable style={styles.secondaryButton} onPress={clearDecimalPickerValue}>
+                  <Text style={styles.secondaryButtonText}>미입력</Text>
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.pickerPrimaryAction} onPress={applyDecimalPickerValue}>
+                <Text style={styles.pickerPrimaryActionText}>선택 완료</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={Boolean(optionPicker)} transparent animationType="slide" onRequestClose={closeOptionPicker}>
         <View style={styles.pickerBackdrop}>
@@ -2334,45 +2740,121 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.sm,
     alignItems: "center",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "flex-end"
   },
-  topPrimaryButton: {
-    backgroundColor: colors.brand,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignItems: "center",
-    justifyContent: "center"
+  brandButton: {
+    gap: 2
   },
-  topPrimaryButtonText: {
-    color: colors.brandOn,
-    fontSize: 12,
-    fontWeight: "700"
-  },
-  sessionBadge: {
-    borderRadius: 999,
+  menuButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: "#fff",
-    paddingHorizontal: 10,
-    paddingVertical: 6
+    alignItems: "center",
+    justifyContent: "center"
   },
-  sessionBadgeText: {
+  menuButtonText: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    lineHeight: 18,
+    fontWeight: "700"
+  },
+  menuEdgeGestureZone: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: MOBILE_MENU_EDGE_SWIPE,
+    zIndex: 20
+  },
+  menuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 999
+  },
+  menuScrimPressable: {
+    ...StyleSheet.absoluteFillObject
+  },
+  menuScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(8, 18, 16, 0.34)"
+  },
+  menuPanel: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: MOBILE_MENU_WIDTH,
+    backgroundColor: colors.card,
+    borderRightWidth: 1,
+    borderRightColor: "#dbe4df",
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
+    gap: spacing.xs,
+    shadowColor: "#0a1914",
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 4, height: 0 },
+    elevation: 10
+  },
+  menuHeader: {
+    marginBottom: spacing.sm
+  },
+  menuTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary
+  },
+  menuItem: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingVertical: 10,
+    paddingHorizontal: 12
+  },
+  menuItemActive: {
+    backgroundColor: colors.brand,
+    borderColor: colors.brand
+  },
+  menuItemText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  menuItemTextActive: {
+    color: colors.brandOn
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: "#dbe4df",
+    marginVertical: spacing.sm
+  },
+  menuGoogleAction: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#c5d8cf",
+    backgroundColor: "#f2faf7",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 4
+  },
+  menuGoogleActionTitle: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  menuGoogleActionSub: {
     color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: "600"
+    fontSize: 12
   },
   brand: {
     fontSize: 24,
     fontWeight: "700",
     color: colors.textPrimary
-  },
-  tabRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm
   },
   dashboardRangeRow: {
     flexDirection: "row",
@@ -2398,26 +2880,6 @@ const styles = StyleSheet.create({
     fontWeight: "700"
   },
   dashboardRangeChipTextActive: {
-    color: colors.brandOn
-  },
-  tabButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card
-  },
-  tabButtonActive: {
-    backgroundColor: colors.brand,
-    borderColor: colors.brand
-  },
-  tabText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    fontWeight: "600"
-  },
-  tabTextActive: {
     color: colors.brandOn
   },
   content: {
@@ -2517,6 +2979,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "700"
+  },
+  metricChartWrap: {
+    width: "100%",
+    overflow: "hidden",
+    borderRadius: 10
   },
   metricChart: {
     borderRadius: 10
@@ -2665,6 +3132,20 @@ const styles = StyleSheet.create({
   actionGap: {
     marginTop: spacing.md
   },
+  inlineActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-start",
+    marginTop: spacing.xs
+  },
+  datePickerWrap: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    gap: spacing.sm
+  },
   form: {
     gap: spacing.sm
   },
@@ -2749,6 +3230,26 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textPrimary
   },
+  pickerPreviewText: {
+    color: colors.textSecondary,
+    fontSize: 13
+  },
+  decimalColumnRow: {
+    flexDirection: "row",
+    gap: spacing.sm
+  },
+  decimalColumn: {
+    flex: 1,
+    gap: 6
+  },
+  decimalColumnLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  decimalList: {
+    maxHeight: 260
+  },
   pickerList: {
     maxHeight: 360
   },
@@ -2775,6 +3276,24 @@ const styles = StyleSheet.create({
   },
   pickerOptionTextActive: {
     color: colors.brand
+  },
+  pickerActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.sm
+  },
+  pickerPrimaryAction: {
+    backgroundColor: colors.brand,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  pickerPrimaryActionText: {
+    color: colors.brandOn,
+    fontSize: 13,
+    fontWeight: "700"
   },
   pickerCloseButton: {
     alignSelf: "flex-end"

@@ -16,6 +16,22 @@ if [[ ! -f "$APK_PATH" ]]; then
   exit 1
 fi
 
+APK_NAME_LOWER="$(basename "$APK_PATH" | tr '[:upper:]' '[:lower:]')"
+if [[ "$APK_NAME_LOWER" == *preview* || "$APK_NAME_LOWER" == *debug* ]]; then
+  echo "[FAIL] Preview/debug APK cannot be uploaded to release: $APK_PATH"
+  exit 1
+fi
+
+if [[ "$APK_NAME_LOWER" != *release* ]]; then
+  echo "[FAIL] Release upload requires a release APK artifact: $APK_PATH"
+  exit 1
+fi
+
+if [[ "${RELEASE_APK_DRY_RUN:-0}" == "1" ]]; then
+  echo "[PASS] release-apk dry-run: validated release artifact ${APK_PATH}"
+  exit 0
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "[FAIL] gh CLI is not installed"
   exit 1

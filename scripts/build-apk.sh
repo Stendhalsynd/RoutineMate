@@ -224,17 +224,20 @@ sync_android_launcher_icons
 GRADLE_TASK=""
 APK_SRC=""
 OUTPUT_LABEL=""
+BUILD_TYPE=""
 
 case "${PROFILE}" in
   preview|debug)
     GRADLE_TASK="assembleDebug"
     APK_SRC="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
     OUTPUT_LABEL="preview"
+    BUILD_TYPE="debug"
     ;;
   release)
     GRADLE_TASK="assembleRelease"
     APK_SRC="${ANDROID_DIR}/app/build/outputs/apk/release/app-release.apk"
     OUTPUT_LABEL="release"
+    BUILD_TYPE="release"
     ;;
   *)
     echo "[FAIL] Unsupported profile: ${PROFILE}. Use preview|debug|release."
@@ -242,6 +245,7 @@ case "${PROFILE}" in
     ;;
 esac
 
+echo "[INFO] APK profile=${PROFILE} buildType=${BUILD_TYPE} outputLabel=${OUTPUT_LABEL}"
 echo "[INFO] Building Android APK locally with Gradle task=${GRADLE_TASK}"
 cd "${ANDROID_DIR}"
 ./gradlew --no-daemon "${GRADLE_TASK}"
