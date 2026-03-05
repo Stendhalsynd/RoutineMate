@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 
 export const SESSION_COOKIE_NAME = "routinemate_session_id";
 
+function shouldUseSecureCookie(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
 function parseCookieHeader(cookieHeader: string | null): Record<string, string> {
   if (!cookieHeader) {
     return {};
@@ -40,9 +44,8 @@ export function setSessionCookie(response: NextResponse, sessionId: string): voi
     value: sessionId,
     httpOnly: true,
     sameSite: "lax",
-    secure: true,
+    secure: shouldUseSecureCookie(),
     path: "/",
     maxAge: 60 * 60 * 24 * 30
   });
 }
-

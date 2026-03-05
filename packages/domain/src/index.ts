@@ -241,6 +241,12 @@ export interface DashboardBucket {
   bodyMetricRate: number;
 }
 
+export interface BodyMetricTrendPoint {
+  date: string;
+  weightKg: number | null;
+  bodyFatPct: number | null;
+}
+
 export interface DashboardSummary {
   range: RangeKey;
   granularity: DashboardGranularity;
@@ -251,6 +257,7 @@ export interface DashboardSummary {
   latestBodyFatPct: number | null;
   daily: DailyProgress[];
   buckets: DashboardBucket[];
+  bodyMetricTrend: BodyMetricTrendPoint[];
   goals: GoalProgress[];
   consistencyMeta?: DashboardConsistencyMeta;
 }

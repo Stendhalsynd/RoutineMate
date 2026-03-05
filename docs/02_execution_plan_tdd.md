@@ -286,3 +286,35 @@
 - API route 테스트(식단/운동 템플릿 검증) 회귀 통과.
 - `npm run typecheck`, `npm run test` 통과.
 - `npm run notion:schema:check`에서 MealTemplates `MealSlot` 비필수로 점검.
+
+---
+
+## 11) S5 스프린트 (S5-1 ~ S5-3)
+
+### S5-1 대시보드 날짜 경계(UTC 밀림) 수정
+- API: `GET /v1/dashboard`, `GET /v1/bootstrap`
+- 변경: `date` 쿼리 기반 윈도우 계산 + 집계 엔진 `endDateKey` 직접 주입
+- 목표: KST 오전 기록이 UTC 전일로 밀려 누락되는 회귀 제거
+
+### S5-2 웹/모바일 인증 유지
+- API: `GET /v1/auth/session` (`sessionId` 쿼리 fallback 허용)
+- 웹: 쿠키 `secure` 옵션 환경 분기(개발 false, 운영 true)
+- 모바일: `expo-secure-store` 기반 `sessionId` 저장/복구 + silent sign-in 폴백
+
+### S5-3 체성분 전체 추세 라인차트
+- 계약/도메인: `DashboardSummary.bodyMetricTrend` 추가
+- 집계: 범위 데이터와 별도로 전체 body metrics를 수집해 최초~최신 추세 생성
+- UI: 웹/모바일 대시보드에 체중/체지방 라인차트 2개 추가(전체 구간 고정)
+
+### S5 테스트 포인트
+- `apps/web/tests/dashboard-aggregation.test.ts`:
+  - `endDateKey` 기준 집계 및 UTC 경계 케이스 검증
+  - `bodyMetricTrend` 정렬/중복일 처리 검증
+- `apps/web/tests/api-routes.test.ts`:
+  - `/v1/dashboard?...&date=YYYY-MM-DD` 집계 검증
+  - `/v1/auth/session?sessionId=...` 세션 복구 검증
+  - 개발 환경 쿠키 `Secure` 미포함 검증
+- 자동 검증:
+  - `npm run test --workspace @routinemate/web`
+  - `npm run typecheck --workspace @routinemate/web`
+  - `npm run typecheck --workspace @routinemate/mobile`

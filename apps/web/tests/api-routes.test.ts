@@ -93,6 +93,9 @@ test("POST /v1/auth/guest creates a guest session", async () => {
   const payload = (await response.json()) as { data: { sessionId: string; userId: string } };
   assert.equal(typeof payload.data.sessionId, "string");
   assert.equal(typeof payload.data.userId, "string");
+  const setCookie = response.headers.get("set-cookie") ?? "";
+  assert.ok(setCookie.includes("routinemate_session_id="));
+  assert.equal(setCookie.includes("Secure"), false);
 });
 
 test("GET /v1/auth/session restores session from cookie and returns null without cookie", async () => {
@@ -113,6 +116,13 @@ test("GET /v1/auth/session restores session from cookie and returns null without
   assert.equal(restored.status, 200);
   const restoredPayload = (await restored.json()) as { data: { sessionId: string } };
   assert.equal(restoredPayload.data.sessionId, session.sessionId);
+
+  const byQuery = await getAuthSession(
+    new Request(`http://localhost/api/v1/auth/session?sessionId=${encodeURIComponent(session.sessionId)}`)
+  );
+  assert.equal(byQuery.status, 200);
+  const byQueryPayload = (await byQuery.json()) as { data: { sessionId: string } };
+  assert.equal(byQueryPayload.data.sessionId, session.sessionId);
 });
 
 test("POST /v1/auth/upgrade/google upgrades session and POST /v1/auth/google/session restores it", async () => {
@@ -409,6 +419,42 @@ test("GET /v1/dashboard without sessionId returns 400", async () => {
 test("GET /v1/dashboard with unknown session returns 404", async () => {
   const response = await getDashboard(new Request("http://localhost/api/v1/dashboard?sessionId=missing&range=7d"));
   assert.equal(response.status, 404);
+});
+
+test("GET /v1/dashboard honors date query as local-day range end", async () => {
+  const session = await makeSession();
+
+  const workoutResponse = await createWorkout(
+    new Request("http://localhost/api/v1/workout-logs/quick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        date: "2026-03-04",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        exerciseName: "오전 운동",
+        workoutSlot: "am",
+        completed: true,
+        durationMinutes: 30,
+        intensity: "medium"
+      })
+    })
+  );
+  assert.equal(workoutResponse.status, 201);
+
+  const response = await getDashboard(
+    new Request(
+      `http://localhost/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=7d&date=2026-03-04`
+    )
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    data: { totalWorkouts: number; consistencyMeta?: { windowEnd?: string } };
+  };
+  assert.equal(payload.data.totalWorkouts, 1);
+  assert.equal(payload.data.consistencyMeta?.windowEnd, "2026-03-04");
 });
 
 test("POST /v1/meal-logs/quick rejects impossible date", async () => {

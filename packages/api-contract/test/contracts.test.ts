@@ -7,6 +7,7 @@ import {
   googleSessionRequestSchema,
   googleUpgradeRequestSchema,
   bodyMetricUpdateSchema,
+  dashboardQuerySchema,
   calendarRangeQuerySchema,
   calendarDayQuerySchema,
   goalInputSchema,
@@ -154,6 +155,22 @@ test("bootstrapQuerySchema parses view/range/date with optional session", () => 
     date: "2026-03-01"
   });
   assert.equal(result.success, true);
+});
+
+test("dashboardQuerySchema parses optional date and rejects invalid date", () => {
+  const valid = dashboardQuerySchema.safeParse({
+    sessionId: "sess-1",
+    range: "7d",
+    date: "2026-03-04"
+  });
+  const invalid = dashboardQuerySchema.safeParse({
+    sessionId: "sess-1",
+    range: "7d",
+    date: "2026-03-32"
+  });
+
+  assert.equal(valid.success, true);
+  assert.equal(invalid.success, false);
 });
 
 test("bootstrapResponseSchema accepts nullable session payload", () => {

@@ -5,9 +5,8 @@ import { badRequest, internalError, ok, zodIssues } from "@/lib/api-utils";
 import { repo } from "@/lib/repository";
 import { resolveSessionId } from "@/lib/session-cookie";
 
-function buildRangeWindow(range: "7d" | "30d" | "90d"): { from: string; to: string } {
-  const now = new Date();
-  const to = now.toISOString().slice(0, 10);
+function buildRangeWindow(range: "7d" | "30d" | "90d", endDateKey: string): { from: string; to: string } {
+  const to = endDateKey.slice(0, 10);
   const endMs = Date.parse(`${to}T00:00:00.000Z`);
   const fromMs = endMs - (rangeToDays(range) - 1) * 24 * 60 * 60 * 1000;
   return {
@@ -52,6 +51,7 @@ export async function GET(request: Request) {
 
     const fetchedAt = new Date().toISOString();
     const forceFresh = parsed.data.fresh === "1" || parsed.data.fresh === "true";
+    const referenceDate = parsed.data.date ?? new Date().toISOString().slice(0, 10);
     if (!parsed.data.sessionId) {
       return ok({ session: null, fetchedAt }, 200);
     }
@@ -81,13 +81,14 @@ export async function GET(request: Request) {
     };
 
     if (parsed.data.view === "dashboard" || parsed.data.view === "records") {
-      const window = buildRangeWindow(parsed.data.range);
-      const [mealLogs, checkins, workouts, bodyMetrics, goals] = await Promise.all([
+      const window = buildRangeWindow(parsed.data.range, referenceDate);
+      const [mealLogs, checkins, workouts, bodyMetrics, goals, allBodyMetrics] = await Promise.all([
         repo.listMealsByUserInRange(session.userId, window.from, window.to),
         repo.listMealCheckinsByUserInRange(session.userId, window.from, window.to),
         repo.listWorkoutsByUserInRange(session.userId, window.from, window.to),
         repo.listBodyMetricsByUserInRange(session.userId, window.from, window.to),
-        repo.listGoalsByUser(session.userId)
+        repo.listGoalsByUser(session.userId),
+        repo.listBodyMetricsByUser(session.userId)
       ]);
 
       const mergedMeals = new Map<string, MealLog>();
@@ -106,12 +107,14 @@ export async function GET(request: Request) {
         meals: Array.from(mergedMeals.values()),
         workouts,
         bodyMetrics,
-        goals
+        allBodyMetrics,
+        goals,
+        endDateKey: referenceDate
       });
     }
 
     if (parsed.data.view === "records") {
-      const date = parsed.data.date ?? new Date().toISOString().slice(0, 10);
+      const date = parsed.data.date ?? referenceDate;
       const [mealCheckins, workoutLogs, bodyMetrics] = await Promise.all([
         repo.listMealCheckinsByUserInRange(session.userId, date, date),
         repo.listWorkoutsByUserInRange(session.userId, date, date),

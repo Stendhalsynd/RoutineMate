@@ -258,6 +258,7 @@ export const calendarRangeQuerySchema = z
 export const dashboardQuerySchema = z.object({
   sessionId: nonEmptyString,
   range: rangeSchema.default("7d"),
+  date: isoDateSchema.optional(),
   fresh: z.union([z.literal("1"), z.literal("true"), z.literal("0"), z.literal("false")]).optional()
 });
 

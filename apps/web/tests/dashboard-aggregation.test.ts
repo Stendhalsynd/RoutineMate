@@ -240,3 +240,85 @@ test("aggregateDashboard includes d-day and target comparison fields in goal pro
   assert.equal(goal.bodyFatDeltaPct, 1);
   assert.equal(typeof goal.goalAchievementRate, "number");
 });
+
+test("aggregateDashboard respects explicit endDateKey for local-day windows", () => {
+  const summary = aggregateDashboard({
+    range: "7d",
+    now: new Date("2026-03-03T23:40:00.000Z"),
+    endDateKey: "2026-03-04",
+    meals: [],
+    workouts: [
+      {
+        id: "w1",
+        userId: "u1",
+        date: "2026-03-04",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        exerciseName: "AM",
+        durationMinutes: 30,
+        intensity: "medium",
+        workoutSlot: "am",
+        completed: true,
+        createdAt: "2026-03-04T00:00:00.000Z"
+      }
+    ],
+    bodyMetrics: [],
+    goals: []
+  });
+
+  assert.equal(summary.totalWorkouts, 1);
+  assert.equal(summary.consistencyMeta?.windowEnd, "2026-03-04");
+  assert.equal(summary.buckets[summary.buckets.length - 1]?.key, "2026-03-04");
+});
+
+test("aggregateDashboard builds full body metric trend and keeps last record per day", () => {
+  const summary = aggregateDashboard({
+    range: "7d",
+    endDateKey: "2026-03-04",
+    meals: [],
+    workouts: [],
+    bodyMetrics: [
+      {
+        id: "r1",
+        userId: "u1",
+        date: "2026-03-04",
+        weightKg: 70.2,
+        bodyFatPct: 19.5,
+        createdAt: "2026-03-04T00:00:00.000Z"
+      }
+    ],
+    allBodyMetrics: [
+      {
+        id: "a1",
+        userId: "u1",
+        date: "2026-03-01",
+        weightKg: 71.1,
+        bodyFatPct: 20.1,
+        createdAt: "2026-03-01T00:00:00.000Z"
+      },
+      {
+        id: "a2",
+        userId: "u1",
+        date: "2026-03-01",
+        weightKg: 70.9,
+        bodyFatPct: 19.9,
+        createdAt: "2026-03-01T01:00:00.000Z"
+      },
+      {
+        id: "a3",
+        userId: "u1",
+        date: "2026-03-04",
+        weightKg: 70.2,
+        bodyFatPct: 19.5,
+        createdAt: "2026-03-04T00:00:00.000Z"
+      }
+    ],
+    goals: []
+  });
+
+  assert.deepEqual(summary.bodyMetricTrend, [
+    { date: "2026-03-01", weightKg: 70.9, bodyFatPct: 19.9 },
+    { date: "2026-03-04", weightKg: 70.2, bodyFatPct: 19.5 }
+  ]);
+});

@@ -189,6 +189,92 @@ function formatDday(daysToDday?: number): string {
   return `D+${Math.abs(daysToDday)}`;
 }
 
+type MetricTrendChartProps = {
+  title: string;
+  unit: string;
+  colorClassName: string;
+  points: Array<{ date: string; value: number }>;
+};
+
+function MetricTrendChart({ title, unit, colorClassName, points }: MetricTrendChartProps) {
+  if (points.length === 0) {
+    return (
+      <article className="metric-trend-card">
+        <h4>{title}</h4>
+        <p className="hint">기록이 쌓이면 라인차트를 표시합니다.</p>
+      </article>
+    );
+  }
+
+  const width = 680;
+  const height = 220;
+  const padding = { top: 20, right: 16, bottom: 34, left: 40 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+
+  const values = points.map((item) => item.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const valueRange = max - min || 1;
+  const total = points.length;
+
+  const coords = points.map((point, index) => {
+    const x =
+      total === 1
+        ? padding.left + plotWidth / 2
+        : padding.left + (index / Math.max(total - 1, 1)) * plotWidth;
+    const y = padding.top + ((max - point.value) / valueRange) * plotHeight;
+    return { x, y, point };
+  });
+
+  const line = coords
+    .map((item, index) => `${index === 0 ? "M" : "L"}${item.x.toFixed(2)} ${item.y.toFixed(2)}`)
+    .join(" ");
+
+  const firstDate = points[0]?.date ?? "";
+  const lastDate = points[points.length - 1]?.date ?? "";
+  const latest = points[points.length - 1]?.value;
+
+  return (
+    <article className="metric-trend-card">
+      <div className="metric-trend-head">
+        <h4>{title}</h4>
+        <p className="metric-trend-latest">{latest !== undefined ? `${latest.toFixed(1)}${unit}` : "--"}</p>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="metric-trend-svg" role="img" aria-label={`${title} 라인차트`}>
+        <rect x={padding.left} y={padding.top} width={plotWidth} height={plotHeight} className="metric-grid-bg" />
+        <line
+          x1={padding.left}
+          y1={padding.top}
+          x2={padding.left}
+          y2={padding.top + plotHeight}
+          className="metric-axis-line"
+        />
+        <line
+          x1={padding.left}
+          y1={padding.top + plotHeight}
+          x2={padding.left + plotWidth}
+          y2={padding.top + plotHeight}
+          className="metric-axis-line"
+        />
+        <path d={line} className={`metric-line ${colorClassName}`} />
+        {coords.map((item) => (
+          <circle
+            key={`${title}-${item.point.date}`}
+            cx={item.x}
+            cy={item.y}
+            r={3}
+            className={`metric-dot ${colorClassName}`}
+          />
+        ))}
+      </svg>
+      <p className="metric-trend-range">
+        {firstDate} ~ {lastDate}
+      </p>
+    </article>
+  );
+}
+
 function buildDecimalOptions(min: number, max: number, step: number): string[] {
   const options: string[] = [];
   for (let value = min; value <= max + 0.00001; value += step) {
@@ -699,6 +785,20 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const workoutTemplates = (workoutTemplatesQuery.data ?? []) as WorkoutTemplate[];
   const reminderSettings = (reminderSettingsQuery.data ?? null) as ReminderSettings | null;
   const reminderEvaluation = (reminderEvaluationQuery.data ?? null) as ReminderEvaluation | null;
+  const weightTrendPoints = useMemo(
+    () =>
+      (dashboard?.bodyMetricTrend ?? [])
+        .filter((item) => item.weightKg !== null)
+        .map((item) => ({ date: item.date, value: item.weightKg as number })),
+    [dashboard?.bodyMetricTrend]
+  );
+  const bodyFatTrendPoints = useMemo(
+    () =>
+      (dashboard?.bodyMetricTrend ?? [])
+        .filter((item) => item.bodyFatPct !== null)
+        .map((item) => ({ date: item.date, value: item.bodyFatPct as number })),
+    [dashboard?.bodyMetricTrend]
+  );
   const isSyncing = (() => {
     if (view === "dashboard") {
       return sessionQuery.isFetching || bootstrapQuery.isFetching;
@@ -1755,6 +1855,19 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="metric-trend-panel">
+            <h3>체성분 추세 (전체 기록)</h3>
+            <div className="metric-trend-grid">
+              <MetricTrendChart title="체중" unit="kg" colorClassName="metric-line-weight" points={weightTrendPoints} />
+              <MetricTrendChart
+                title="체지방"
+                unit="%"
+                colorClassName="metric-line-bodyfat"
+                points={bodyFatTrendPoints}
+              />
+            </div>
           </div>
 
           <div className="goal-summary">

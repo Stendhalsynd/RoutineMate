@@ -19,10 +19,15 @@ import {
   Platform,
   StatusBar as RNStatusBar,
   View,
+  useWindowDimensions,
   type KeyboardTypeOptions
 } from "react-native";
 import * as React from "react";
 import { cardRadius, colors, spacing } from "@routinemate/ui";
+import { LineChart } from "react-native-chart-kit";
+import { clearStoredSessionId, persistSessionId, readStoredSessionId } from "./src/lib/session-store";
+
+const ChartLine = LineChart as unknown as React.ComponentType<any>;
 
 type TabKey = "dashboard" | "records" | "settings";
 
@@ -40,6 +45,11 @@ type Dashboard = {
   totalWorkouts: number;
   range: string;
   granularity: string;
+  bodyMetricTrend: Array<{
+    date: string;
+    weightKg: number | null;
+    bodyFatPct: number | null;
+  }>;
   buckets: Array<{
     key: string;
     label: string;
@@ -341,6 +351,78 @@ function buildIntegerOptions(min: number, max: number, unit = ""): PickerOption[
   return options;
 }
 
+type MetricLineChartProps = {
+  title: string;
+  unit: string;
+  color: string;
+  points: Array<{ date: string; value: number }>;
+  width: number;
+};
+
+function MetricLineChart({ title, unit, color, points, width }: MetricLineChartProps): React.JSX.Element {
+  if (points.length === 0) {
+    return (
+      <View style={styles.metricCard}>
+        <Text style={styles.sectionSubTitle}>{title}</Text>
+        <Text style={styles.hint}>기록이 쌓이면 라인차트가 표시됩니다.</Text>
+      </View>
+    );
+  }
+
+  const labels = points.map((point, index) =>
+    index === 0 || index === points.length - 1 ? point.date.slice(5) : ""
+  );
+  const values = points.map((item) => Number(item.value.toFixed(1)));
+  const latest = points[points.length - 1]?.value;
+  const firstDate = points[0]?.date ?? "";
+  const lastDate = points[points.length - 1]?.date ?? "";
+
+  return (
+    <View style={styles.metricCard}>
+      <View style={styles.metricHeader}>
+        <Text style={styles.sectionSubTitle}>{title}</Text>
+        <Text style={styles.metricLatest}>{latest !== undefined ? `${latest.toFixed(1)}${unit}` : "--"}</Text>
+      </View>
+      <ChartLine
+        data={{
+          labels,
+          datasets: [{ data: values, color: () => color, strokeWidth: 2.5 }]
+        }}
+        width={width}
+        height={180}
+        withInnerLines
+        withOuterLines={false}
+        withVerticalLines={false}
+        withHorizontalLabels
+        withVerticalLabels
+        fromZero={false}
+        segments={4}
+        bezier={points.length >= 3}
+        chartConfig={{
+          backgroundGradientFrom: "#fbfcfd",
+          backgroundGradientTo: "#fbfcfd",
+          decimalPlaces: 1,
+          color: () => color,
+          labelColor: () => colors.textSecondary,
+          propsForDots: {
+            r: "3",
+            strokeWidth: "1",
+            stroke: color
+          },
+          propsForBackgroundLines: {
+            stroke: "#d8dde1",
+            strokeWidth: 1
+          }
+        }}
+        style={styles.metricChart}
+      />
+      <Text style={styles.metricRangeText}>
+        {firstDate} ~ {lastDate}
+      </Text>
+    </View>
+  );
+}
+
 function FieldInput({
   label,
   value,
@@ -413,6 +495,7 @@ function SelectRow({
 }
 
 export default function App(): React.JSX.Element {
+  const { width: viewportWidth } = useWindowDimensions();
   const [tab, setTab] = React.useState<TabKey>("dashboard");
   const [session, setSession] = React.useState<Session | null>(null);
   const [message, setMessage] = React.useState<Message | null>(null);
@@ -490,6 +573,21 @@ export default function App(): React.JSX.Element {
     () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(3, 60, 0.1, "%")],
     []
   );
+  const chartWidth = React.useMemo(() => Math.max(250, viewportWidth - 86), [viewportWidth]);
+  const weightTrendPoints = React.useMemo(
+    () =>
+      (dashboard?.bodyMetricTrend ?? [])
+        .filter((item) => item.weightKg !== null)
+        .map((item) => ({ date: item.date, value: item.weightKg as number })),
+    [dashboard?.bodyMetricTrend]
+  );
+  const bodyFatTrendPoints = React.useMemo(
+    () =>
+      (dashboard?.bodyMetricTrend ?? [])
+        .filter((item) => item.bodyFatPct !== null)
+        .map((item) => ({ date: item.date, value: item.bodyFatPct as number })),
+    [dashboard?.bodyMetricTrend]
+  );
 
   const checkinBySlot = React.useMemo(() => {
     const map = new Map<MealSlot, MealCheckin>();
@@ -565,9 +663,12 @@ export default function App(): React.JSX.Element {
 
     try {
       setIsSyncing(true);
+      const dashboardDate = todayYmd();
       const freshSuffix = fresh ? "&fresh=1" : "";
       const [dashboardData, goalData, reminderSettingsData] = await Promise.all([
-        apiFetch<Dashboard>(`/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}${freshSuffix}`),
+        apiFetch<Dashboard>(
+          `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}&date=${encodeURIComponent(dashboardDate)}${freshSuffix}`
+        ),
         apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(session.sessionId)}`),
         apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`).then(
           (payload: { settings: ReminderSettings | null }) => payload
@@ -597,7 +698,7 @@ export default function App(): React.JSX.Element {
             continue;
           }
           void apiFetch<Dashboard>(
-            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}`
+            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}&date=${encodeURIComponent(dashboardDate)}`
           )
             .then((next) => {
               dashboardCacheRef.current[candidate] = next;
@@ -677,7 +778,31 @@ export default function App(): React.JSX.Element {
         }
         if (restored?.sessionId) {
           setSession(restored);
+          await persistSessionId(restored.sessionId);
           return;
+        }
+
+        const storedSessionId = await readStoredSessionId();
+        if (!mounted) {
+          return;
+        }
+        if (storedSessionId) {
+          try {
+            const restoredByStoredId = await apiFetch<Session | null>(
+              `/api/v1/auth/session?sessionId=${encodeURIComponent(storedSessionId)}`
+            );
+            if (!mounted) {
+              return;
+            }
+            if (restoredByStoredId?.sessionId) {
+              setSession(restoredByStoredId);
+              await persistSessionId(restoredByStoredId.sessionId);
+              return;
+            }
+            await clearStoredSessionId();
+          } catch {
+            await clearStoredSessionId();
+          }
         }
 
         if (!GOOGLE_WEB_CLIENT_ID) {
@@ -703,6 +828,7 @@ export default function App(): React.JSX.Element {
         });
         if (mounted) {
           setSession(googleSession);
+          await persistSessionId(googleSession.sessionId);
           setMessage({ type: "success", text: "Google 세션이 복원되었습니다." });
         }
       } catch {
@@ -717,6 +843,13 @@ export default function App(): React.JSX.Element {
       mounted = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!session?.sessionId) {
+      return;
+    }
+    void persistSessionId(session.sessionId);
+  }, [session?.sessionId]);
 
   React.useEffect(() => {
     if (!session) {
@@ -1439,6 +1572,7 @@ export default function App(): React.JSX.Element {
         })
       });
       setSession(payload);
+      await persistSessionId(payload.sessionId);
       setMessage({ type: "success", text: "Google 로그인이 완료되었습니다." });
       void refreshCoreSessionData(true);
       void loadTemplateCatalog();
@@ -1569,6 +1703,11 @@ export default function App(): React.JSX.Element {
               ) : (
                 <Text style={styles.hint}>기록이 쌓이면 추세를 표시합니다.</Text>
               )}
+            </View>
+            <View style={styles.metricPanel}>
+              <Text style={styles.sectionSubTitle}>체성분 추세 (전체 기록)</Text>
+              <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} width={chartWidth} />
+              <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} width={chartWidth} />
             </View>
             {goal ? <Text style={styles.hint}>현재 목표: 주 {goal.weeklyRoutineTarget}회</Text> : <Text style={styles.hint}>현재 목표: 미설정</Text>}
             <Text style={styles.hint}>최근 체중 {dashboard?.latestWeightKg ?? "-"}kg / 체지방 {dashboard?.latestBodyFatPct ?? "-"}%</Text>
@@ -2349,6 +2488,42 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     gap: 8
+  },
+  metricPanel: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 10
+  },
+  metricCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fbfcfd",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    gap: 6
+  },
+  metricHeader: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 8
+  },
+  metricLatest: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  metricChart: {
+    borderRadius: 10
+  },
+  metricRangeText: {
+    color: colors.textSecondary,
+    fontSize: 11
   },
   trendRow: {
     flexDirection: "row",

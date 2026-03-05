@@ -1,10 +1,11 @@
 import { internalError, ok } from "@/lib/api-utils";
 import { repo } from "@/lib/repository";
-import { getSessionIdFromRequest, setSessionCookie } from "@/lib/session-cookie";
+import { resolveSessionId, setSessionCookie } from "@/lib/session-cookie";
 
 export async function GET(request: Request) {
   try {
-    const sessionId = getSessionIdFromRequest(request);
+    const params = new URL(request.url).searchParams;
+    const sessionId = resolveSessionId(request, params.get("sessionId"));
     if (!sessionId) {
       return ok(null, 200);
     }

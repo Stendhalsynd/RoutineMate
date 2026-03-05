@@ -179,7 +179,9 @@ APK 릴리즈(S4-4) 참고:
 3. 식단 저장 성공
 4. 운동 저장 성공
 5. 체중/체지방 저장 성공
-6. 새로고침 후 기록 유지(쿠키 기반 세션 + Notion 조회)
+6. 세션 유지 확인
+   - 웹: 새로고침 후 Google 세션 유지(`routinemate_session_id` 쿠키)
+   - 모바일: 앱 재실행 후 SecureStore `sessionId` 복구 또는 silent sign-in 복구
 
 ---
 
@@ -328,3 +330,18 @@ keytool -list -v -keystore /path/to/your-release.keystore -alias YOUR_ALIAS
 6. 환경변수 정합성
 - Vercel/서버 환경변수에 `GOOGLE_WEB_CLIENT_ID`, `GOOGLE_ANDROID_CLIENT_ID`를 등록합니다.
 - 모바일 빌드 환경변수에 `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`를 등록하고 APK를 새로 빌드합니다.
+
+## 10) S5 운영 메모 (2026-03-05)
+
+### 대시보드 조회 날짜 파라미터
+- UTC 경계 누락 방지를 위해 대시보드 호출 시 `date=YYYY-MM-DD`를 함께 전달합니다.
+- 모바일 클라이언트는 `todayYmd()` 기준 `GET /v1/dashboard?...&date=...`를 기본 호출로 사용합니다.
+
+### 세션 복구 우선순위
+1. `GET /v1/auth/session` (쿠키)
+2. `GET /v1/auth/session?sessionId=...` (SecureStore fallback)
+3. `GoogleSignin.signInSilently()` 후 `POST /v1/auth/google/session`
+
+### Notion 스키마 영향도
+- S5 변경은 Notion DB 컬럼 추가/삭제가 필요하지 않습니다.
+- 체성분 전체 추세(`bodyMetricTrend`)는 기존 `BodyMetrics` 데이터를 전체 기간으로 재집계해 생성합니다.

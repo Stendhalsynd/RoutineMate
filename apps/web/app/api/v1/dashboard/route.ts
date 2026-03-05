@@ -32,9 +32,8 @@ function mealCheckinToMealLog(
   };
 }
 
-function buildRangeWindow(range: "7d" | "30d" | "90d"): { from: string; to: string } {
-  const now = new Date();
-  const to = now.toISOString().slice(0, 10);
+function buildRangeWindow(range: "7d" | "30d" | "90d", endDateKey: string): { from: string; to: string } {
+  const to = endDateKey.slice(0, 10);
   const endMs = Date.parse(`${to}T00:00:00.000Z`);
   const fromMs = endMs - (rangeToDays(range) - 1) * 24 * 60 * 60 * 1000;
   return {
@@ -51,6 +50,7 @@ export async function GET(request: Request) {
     const parsed = dashboardQuerySchema.safeParse({
       sessionId,
       range: params.get("range") ?? undefined,
+      date: params.get("date") ?? undefined,
       fresh: params.get("fresh") ?? undefined
     });
 
@@ -63,7 +63,8 @@ export async function GET(request: Request) {
       return notFound("Session was not found.");
     }
 
-    const window = buildRangeWindow(parsed.data.range);
+    const endDateKey = parsed.data.date ?? new Date().toISOString().slice(0, 10);
+    const window = buildRangeWindow(parsed.data.range, endDateKey);
     const cacheKey = `${session.userId}:${parsed.data.range}:${window.to}`;
     const forceFresh = parsed.data.fresh === "1" || parsed.data.fresh === "true";
     const cached = dashboardCache.get(cacheKey);
@@ -87,12 +88,21 @@ export async function GET(request: Request) {
       }
     }
 
+    const [workouts, bodyMetrics, goals, allBodyMetrics] = await Promise.all([
+      repo.listWorkoutsByUserInRange(session.userId, window.from, window.to),
+      repo.listBodyMetricsByUserInRange(session.userId, window.from, window.to),
+      repo.listGoalsByUser(session.userId),
+      repo.listBodyMetricsByUser(session.userId)
+    ]);
+
     const summary = aggregateDashboard({
       range: parsed.data.range,
       meals: Array.from(mergedMeals.values()),
-      workouts: await repo.listWorkoutsByUserInRange(session.userId, window.from, window.to),
-      bodyMetrics: await repo.listBodyMetricsByUserInRange(session.userId, window.from, window.to),
-      goals: await repo.listGoalsByUser(session.userId)
+      workouts,
+      bodyMetrics,
+      allBodyMetrics,
+      goals,
+      endDateKey
     });
 
     dashboardCache.set(cacheKey, {

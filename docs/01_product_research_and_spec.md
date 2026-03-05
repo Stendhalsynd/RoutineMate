@@ -297,3 +297,22 @@
 
 ### 동기화 기준
 - 웹/모바일은 동일 Google 계정(`authProvider=google`) 기준으로 같은 user 데이터셋을 조회한다.
+
+---
+
+## 15) S5 대시보드/인증/체성분 추세 업데이트 (2026-03-05)
+
+### S5-1 날짜 경계 보정
+- 오전 기록 누락 이슈 대응을 위해 대시보드 집계의 기준일을 `UTC now`가 아니라 요청 `date(YYYY-MM-DD)`로 고정.
+- `GET /v1/dashboard`, `GET /v1/bootstrap` 모두 `date` 쿼리를 지원하며 같은 날짜 윈도우로 집계.
+- 모바일 대시보드 요청은 항상 `date=todayYmd()`를 포함해 시간대 경계 영향을 제거.
+
+### S5-2 인증 유지 개선
+- 세션 쿠키 `secure`는 `NODE_ENV=production`일 때만 true.
+- `GET /v1/auth/session`은 쿠키가 없을 때 `?sessionId=` fallback으로 복구 가능.
+- 모바일은 `expo-secure-store`에 sessionId를 저장/복원하고, 실패 시 `GoogleSignin.signInSilently()`를 마지막 단계로 사용.
+
+### S5-3 체성분 라인차트 확장
+- `DashboardSummary`에 `bodyMetricTrend`(최초~최신 전체 기록) 추가.
+- 동일 날짜 중복 기록은 마지막 기록 우선으로 정규화하고, 없는 축 값은 `null` 허용.
+- 웹/모바일 대시보드 모두 `체중`/`체지방` 2개 라인차트를 제공하며, `7d/30d/90d` 토글과 독립적으로 전체 구간을 표시.
