@@ -343,19 +343,22 @@ p {
 
 .metric-trend-head h4 {
   font-size: 14px;
+  min-width: 0;
 }
 
 .metric-trend-latest {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .metric-trend-svg {
   width: 100%;
   height: 180px;
   display: block;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .metric-trend-svg-wrap {

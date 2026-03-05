@@ -326,3 +326,34 @@
   - `npm run test --workspace @routinemate/web`
   - `npm run typecheck --workspace @routinemate/web`
   - `npm run typecheck --workspace @routinemate/mobile`
+
+## 12) S5-5 스프린트 (차트 넘침 + 릴리즈 산출물 가드)
+
+### S5-5.1 TDD 베이스
+- 모바일 차트 폭 계산 테스트 추가:
+  - 레거시 공식(`viewport - 86`)은 컨테이너 폭 초과 가능
+  - 컨테이너 기반 공식은 컨테이너 폭 이하 유지
+  - 경계값 `0/1/119/120/121` 결정적 동작 검증
+- 모바일 테스트 스크립트 활성화:
+  - `npm run test --workspace @routinemate/mobile`
+
+### S5-5.2 모바일 차트 폭 계산 교체
+- `MetricLineChart`가 `onLayout` 실측 폭을 사용해 `react-native-chart-kit` 폭을 계산.
+- 기존 `viewportWidth - 86` 계산 경로 제거.
+- `metricChartWrap`에 `overflow: hidden` 적용으로 카드 경계 밖 렌더를 차단.
+
+### S5-5.3 웹 차트 경계 하드닝
+- `.metric-trend-svg`를 `overflow: hidden`으로 고정.
+- 차트 헤더 텍스트 축소 정책 보강(`min-width:0`, `nowrap/shrink`).
+- CSS 규칙 회귀 테스트 추가.
+
+### S5-5.4 릴리즈 산출물 가드
+- `scripts/release-apk.sh`:
+  - `preview/debug` APK 업로드 차단
+  - `release` 아티팩트만 허용
+  - `RELEASE_APK_DRY_RUN=1` 검증 모드 추가(네트워크/gh 의존성 없이 테스트 가능)
+- `scripts/build-apk.sh`:
+  - 빌드 로그에 `profile/buildType/outputLabel` 명시 출력
+- 루트 단위 테스트:
+  - `tests/unit/release-apk-guard.test.ts`
+  - `npm run test:unit`

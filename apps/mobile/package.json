@@ -8,7 +8,7 @@
     "android": "expo run:android",
     "lint": "echo 'mobile lint placeholder'",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'mobile unit placeholder'"
+    "test": "node --test --import tsx tests/*.test.ts"
   },
   "dependencies": {
     "@react-native-google-signin/google-signin": "^16.1.2",
@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@types/react": "~18.3.12",
+    "tsx": "^4.20.5",
     "typescript": "^5.6.3"
   }
 }

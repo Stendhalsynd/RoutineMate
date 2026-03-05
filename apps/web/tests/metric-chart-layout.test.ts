@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import path from "node:path";
 
 import { buildMetricChartLayout } from "../src/lib/metric-chart";
 
@@ -33,4 +35,12 @@ test("metric chart path generation stays finite for single-point and empty-point
   const empty = buildMetricChartLayout([], 320);
   assert.equal(empty.coords.length, 0);
   assert.equal(empty.linePath, "");
+});
+
+test("web chart css keeps metric svg overflow hidden", () => {
+  const cssPath = path.resolve(process.cwd(), "app/globals.css");
+  const css = readFileSync(cssPath, "utf8");
+  const svgBlockMatch = css.match(/\.metric-trend-svg\s*\{[^}]*\}/m);
+  assert.ok(svgBlockMatch);
+  assert.ok((svgBlockMatch?.[0] ?? "").includes("overflow: hidden;"));
 });

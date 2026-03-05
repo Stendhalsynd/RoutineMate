@@ -19,13 +19,14 @@ import {
   Platform,
   StatusBar as RNStatusBar,
   View,
-  useWindowDimensions,
-  type KeyboardTypeOptions
+  type KeyboardTypeOptions,
+  type LayoutChangeEvent
 } from "react-native";
 import * as React from "react";
 import { cardRadius, colors, spacing } from "@routinemate/ui";
 import { LineChart } from "react-native-chart-kit";
 import { clearStoredSessionId, persistSessionId, readStoredSessionId } from "./src/lib/session-store";
+import { computeMetricChartWidth } from "./src/lib/metric-chart-width";
 
 const ChartLine = LineChart as unknown as React.ComponentType<any>;
 
@@ -362,10 +363,9 @@ type MetricLineChartProps = {
   unit: string;
   color: string;
   points: Array<{ date: string; value: number }>;
-  width: number;
 };
 
-function MetricLineChart({ title, unit, color, points, width }: MetricLineChartProps): React.JSX.Element {
+function MetricLineChart({ title, unit, color, points }: MetricLineChartProps): React.JSX.Element {
   if (points.length === 0) {
     return (
       <View style={styles.metricCard}>
@@ -382,6 +382,12 @@ function MetricLineChart({ title, unit, color, points, width }: MetricLineChartP
   const latest = points[points.length - 1]?.value;
   const firstDate = points[0]?.date ?? "";
   const lastDate = points[points.length - 1]?.date ?? "";
+  const [chartWidth, setChartWidth] = React.useState(0);
+
+  const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = computeMetricChartWidth(event.nativeEvent.layout.width);
+    setChartWidth((current) => (current === nextWidth ? current : nextWidth));
+  }, []);
 
   return (
     <View style={styles.metricCard}>
@@ -389,39 +395,43 @@ function MetricLineChart({ title, unit, color, points, width }: MetricLineChartP
         <Text style={styles.sectionSubTitle}>{title}</Text>
         <Text style={styles.metricLatest}>{latest !== undefined ? `${latest.toFixed(1)}${unit}` : "--"}</Text>
       </View>
-      <ChartLine
-        data={{
-          labels,
-          datasets: [{ data: values, color: () => color, strokeWidth: 2.5 }]
-        }}
-        width={width}
-        height={180}
-        withInnerLines
-        withOuterLines={false}
-        withVerticalLines={false}
-        withHorizontalLabels
-        withVerticalLabels
-        fromZero={false}
-        segments={4}
-        bezier={points.length >= 3}
-        chartConfig={{
-          backgroundGradientFrom: "#fbfcfd",
-          backgroundGradientTo: "#fbfcfd",
-          decimalPlaces: 1,
-          color: () => color,
-          labelColor: () => colors.textSecondary,
-          propsForDots: {
-            r: "3",
-            strokeWidth: "1",
-            stroke: color
-          },
-          propsForBackgroundLines: {
-            stroke: "#d8dde1",
-            strokeWidth: 1
-          }
-        }}
-        style={styles.metricChart}
-      />
+      <View style={styles.metricChartWrap} onLayout={handleLayout}>
+        {chartWidth > 0 ? (
+          <ChartLine
+            data={{
+              labels,
+              datasets: [{ data: values, color: () => color, strokeWidth: 2.5 }]
+            }}
+            width={chartWidth}
+            height={180}
+            withInnerLines
+            withOuterLines={false}
+            withVerticalLines={false}
+            withHorizontalLabels
+            withVerticalLabels
+            fromZero={false}
+            segments={4}
+            bezier={points.length >= 3}
+            chartConfig={{
+              backgroundGradientFrom: "#fbfcfd",
+              backgroundGradientTo: "#fbfcfd",
+              decimalPlaces: 1,
+              color: () => color,
+              labelColor: () => colors.textSecondary,
+              propsForDots: {
+                r: "3",
+                strokeWidth: "1",
+                stroke: color
+              },
+              propsForBackgroundLines: {
+                stroke: "#d8dde1",
+                strokeWidth: 1
+              }
+            }}
+            style={styles.metricChart}
+          />
+        ) : null}
+      </View>
       <Text style={styles.metricRangeText}>
         {firstDate} ~ {lastDate}
       </Text>
@@ -501,7 +511,6 @@ function SelectRow({
 }
 
 export default function App(): React.JSX.Element {
-  const { width: viewportWidth } = useWindowDimensions();
   const [tab, setTab] = React.useState<TabKey>("dashboard");
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [session, setSession] = React.useState<Session | null>(null);
@@ -580,7 +589,6 @@ export default function App(): React.JSX.Element {
     () => [{ value: "", label: "미입력" }, ...buildDecimalOptions(3, 60, 0.1, "%")],
     []
   );
-  const chartWidth = React.useMemo(() => Math.max(250, viewportWidth - 86), [viewportWidth]);
   const weightTrendPoints = React.useMemo(
     () =>
       (dashboard?.bodyMetricTrend ?? [])
@@ -1723,8 +1731,8 @@ export default function App(): React.JSX.Element {
             </View>
             <View style={styles.metricPanel}>
               <Text style={styles.sectionSubTitle}>체성분 추세 (전체 기록)</Text>
-              <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} width={chartWidth} />
-              <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} width={chartWidth} />
+              <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} />
+              <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} />
             </View>
             {goal ? <Text style={styles.hint}>현재 목표: 주 {goal.weeklyRoutineTarget}회</Text> : <Text style={styles.hint}>현재 목표: 미설정</Text>}
             <Text style={styles.hint}>최근 체중 {dashboard?.latestWeightKg ?? "-"}kg / 체지방 {dashboard?.latestBodyFatPct ?? "-"}%</Text>
@@ -2546,6 +2554,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontWeight: "700"
+  },
+  metricChartWrap: {
+    width: "100%",
+    overflow: "hidden",
+    borderRadius: 10
   },
   metricChart: {
     borderRadius: 10
