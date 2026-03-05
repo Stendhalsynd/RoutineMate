@@ -628,8 +628,8 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const [isGoogleUpgrading, setIsGoogleUpgrading] = useState(false);
 
   const weeklyTargetOptions = useMemo(() => buildIntegerOptions(1, 21), []);
-  const weightOptions = useMemo(() => buildDecimalOptions(30, 200, 0.1), []);
-  const bodyFatOptions = useMemo(() => buildDecimalOptions(3, 60, 0.1), []);
+  const weightOptions = useMemo(() => buildDecimalOptions(65, 95, 0.1), []);
+  const bodyFatOptions = useMemo(() => buildDecimalOptions(5, 35, 0.1), []);
 
   const sessionQuery = useQuery({
     queryKey: queryKeys.session,
