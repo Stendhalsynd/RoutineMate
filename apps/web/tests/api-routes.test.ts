@@ -34,6 +34,7 @@ import {
 import { DELETE as deleteWorkout } from "../app/api/v1/workout-logs/[id]/route";
 import { DELETE as deleteBodyMetric } from "../app/api/v1/body-metrics/[id]/route";
 import { repo } from "../src/lib/repository";
+import { SESSION_MAX_AGE_DAYS } from "../src/lib/session-cookie";
 
 type SessionResponse = { data: { sessionId: string; userId: string } };
 
@@ -96,6 +97,7 @@ test("POST /v1/auth/guest creates a guest session", async () => {
   const setCookie = response.headers.get("set-cookie") ?? "";
   assert.ok(setCookie.includes("routinemate_session_id="));
   assert.equal(setCookie.includes("Secure"), false);
+  assert.ok(setCookie.includes(`Max-Age=${SESSION_MAX_AGE_DAYS * 24 * 60 * 60}`));
 });
 
 test("GET /v1/auth/session restores session from cookie and returns null without cookie", async () => {

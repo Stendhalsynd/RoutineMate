@@ -289,7 +289,7 @@
 
 ---
 
-## 11) S5 스프린트 (S5-1 ~ S5-3)
+## 11) S5 스프린트 (S5-1 ~ S5-4)
 
 ### S5-1 대시보드 날짜 경계(UTC 밀림) 수정
 - API: `GET /v1/dashboard`, `GET /v1/bootstrap`
@@ -306,6 +306,12 @@
 - 집계: 범위 데이터와 별도로 전체 body metrics를 수집해 최초~최신 추세 생성
 - UI: 웹/모바일 대시보드에 체중/체지방 라인차트 2개 추가(전체 구간 고정)
 
+### S5-4 모바일 헤더/내비게이션 정리
+- UI: 웹 상단에서 동기화 상태 뱃지 제거, 브랜드 영역(`로고 하단`)에만 연결 상태 노출
+- 웹: 모바일 뷰에서 상단 탭/하단 탭 제거, 사이드바 메뉴 전환으로 대체
+- 모바일: 햄버거 메뉴 + 사이드 패널로 `대시보드/기록/설정` 이동 가능
+- 문서: UI 변경사항을 docs와 Spec 이력에 동기화
+
 ### S5 테스트 포인트
 - `apps/web/tests/dashboard-aggregation.test.ts`:
   - `endDateKey` 기준 집계 및 UTC 경계 케이스 검증
@@ -314,6 +320,8 @@
   - `/v1/dashboard?...&date=YYYY-MM-DD` 집계 검증
   - `/v1/auth/session?sessionId=...` 세션 복구 검증
   - 개발 환경 쿠키 `Secure` 미포함 검증
+- `apps/web/tests/metric-chart-layout.test.ts`:
+  - 차트 레이아웃 좌표 경계/폭 회귀 테스트
 - 자동 검증:
   - `npm run test --workspace @routinemate/web`
   - `npm run typecheck --workspace @routinemate/web`

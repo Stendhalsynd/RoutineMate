@@ -25,6 +25,11 @@ import type {
   WorkoutTool,
   WorkspaceView
 } from "@routinemate/domain";
+import {
+  buildMetricChartLayout,
+  defaultMetricChartPadding,
+  type MetricPointInput
+} from "@/lib/metric-chart";
 
 type MessageType = "error" | "success" | "info";
 type Message = { type: MessageType; text: string };
@@ -206,34 +211,31 @@ function MetricTrendChart({ title, unit, colorClassName, points }: MetricTrendCh
     );
   }
 
-  const width = 680;
-  const height = 220;
-  const padding = { top: 20, right: 16, bottom: 34, left: 40 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-
-  const values = points.map((item) => item.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const valueRange = max - min || 1;
-  const total = points.length;
-
-  const coords = points.map((point, index) => {
-    const x =
-      total === 1
-        ? padding.left + plotWidth / 2
-        : padding.left + (index / Math.max(total - 1, 1)) * plotWidth;
-    const y = padding.top + ((max - point.value) / valueRange) * plotHeight;
-    return { x, y, point };
-  });
-
-  const line = coords
-    .map((item, index) => `${index === 0 ? "M" : "L"}${item.x.toFixed(2)} ${item.y.toFixed(2)}`)
-    .join(" ");
-
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(320);
+  const layout = buildMetricChartLayout(points, chartWidth, 220, defaultMetricChartPadding);
   const firstDate = points[0]?.date ?? "";
   const lastDate = points[points.length - 1]?.date ?? "";
   const latest = points[points.length - 1]?.value;
+
+  useEffect(() => {
+    const node = chartContainerRef.current;
+    if (!node) {
+      return;
+    }
+
+    const update = (): void => {
+      const nextWidth = Math.max(220, Math.floor(node.clientWidth));
+      setChartWidth((current) => (current === nextWidth ? current : nextWidth));
+    };
+
+    update();
+    const observer = new ResizeObserver(() => {
+      update();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <article className="metric-trend-card">
@@ -241,24 +243,31 @@ function MetricTrendChart({ title, unit, colorClassName, points }: MetricTrendCh
         <h4>{title}</h4>
         <p className="metric-trend-latest">{latest !== undefined ? `${latest.toFixed(1)}${unit}` : "--"}</p>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="metric-trend-svg" role="img" aria-label={`${title} 라인차트`}>
-        <rect x={padding.left} y={padding.top} width={plotWidth} height={plotHeight} className="metric-grid-bg" />
-        <line
-          x1={padding.left}
-          y1={padding.top}
-          x2={padding.left}
-          y2={padding.top + plotHeight}
-          className="metric-axis-line"
-        />
-        <line
-          x1={padding.left}
-          y1={padding.top + plotHeight}
-          x2={padding.left + plotWidth}
-          y2={padding.top + plotHeight}
-          className="metric-axis-line"
-        />
-        <path d={line} className={`metric-line ${colorClassName}`} />
-        {coords.map((item) => (
+      <div ref={chartContainerRef} className="metric-trend-svg-wrap">
+        <svg viewBox={`0 0 ${layout.width} ${layout.height}`} className="metric-trend-svg" role="img" aria-label={`${title} 라인차트`}>
+          <rect
+            x={layout.padding.left}
+            y={layout.padding.top}
+            width={layout.plotWidth}
+            height={layout.plotHeight}
+            className="metric-grid-bg"
+          />
+          <line
+            x1={layout.padding.left}
+            y1={layout.padding.top}
+            x2={layout.padding.left}
+            y2={layout.padding.top + layout.plotHeight}
+            className="metric-axis-line"
+          />
+          <line
+            x1={layout.padding.left}
+            y1={layout.padding.top + layout.plotHeight}
+            x2={layout.padding.left + layout.plotWidth}
+            y2={layout.padding.top + layout.plotHeight}
+            className="metric-axis-line"
+          />
+          <path d={layout.linePath} className={`metric-line ${colorClassName}`} />
+          {layout.coords.map((item) => (
           <circle
             key={`${title}-${item.point.date}`}
             cx={item.x}
@@ -267,7 +276,8 @@ function MetricTrendChart({ title, unit, colorClassName, points }: MetricTrendCh
             className={`metric-dot ${colorClassName}`}
           />
         ))}
-      </svg>
+        </svg>
+      </div>
       <p className="metric-trend-range">
         {firstDate} ~ {lastDate}
       </p>
@@ -799,21 +809,15 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
         .map((item) => ({ date: item.date, value: item.bodyFatPct as number })),
     [dashboard?.bodyMetricTrend]
   );
-  const isSyncing = (() => {
-    if (view === "dashboard") {
-      return sessionQuery.isFetching || bootstrapQuery.isFetching;
+  const sessionStatusText = useMemo(() => {
+    if (!session) {
+      return "Google 로그인 필요";
     }
-    if (view === "records") {
-      return sessionQuery.isFetching || dayQuery.isFetching || reminderEvaluationQuery.isFetching;
+    if (session.authProvider === "google") {
+      return `Google 연결됨 (${session.email ?? "이메일 없음"})`;
     }
-    return (
-      sessionQuery.isFetching ||
-      goalQuery.isFetching ||
-      mealTemplatesQuery.isFetching ||
-      workoutTemplatesQuery.isFetching ||
-      reminderSettingsQuery.isFetching
-    );
-  })();
+    return "로그인 필요";
+  }, [session]);
 
   const goalSyncRef = useRef<string>("");
   useEffect(() => {
@@ -1766,6 +1770,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           <p className="header-eyebrow">ROUTINEMATE</p>
           <h1 className="header-title">오늘의 루틴을 빠르게 기록하고 복기하세요.</h1>
           <p className="header-sub">식단 체크인, 운동, 체성분, 목표를 페이지별로 분리해 관리합니다.</p>
+          <p className="session-status-text">{sessionStatusText}</p>
         </div>
         <div className="header-actions">
           <button
@@ -1780,10 +1785,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 ? "Google 재인증"
                 : "Google 로그인"}
           </button>
-          <p className="session-badge">
-            {session?.authProvider === "google" ? `Google 연결됨 (${session.email ?? "이메일 없음"})` : "로그인 필요"}
-          </p>
-          <p className="session-badge">{isSyncing ? "동기화 중..." : "동기화 완료"}</p>
         </div>
         {sessionMessage ? (
           <p className={`status status-${sessionMessage.type}`} aria-live="polite">
@@ -2150,10 +2151,10 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
             </article>
           </section>
 
-          <section className="card split-grid settings-template-grid">
-            <article>
-              <h2>Google 로그인</h2>
-              <p className="hint">Google 로그인 1회 후 웹/모바일에서 동일 계정 데이터로 동기화됩니다.</p>
+            <section className="card split-grid settings-template-grid">
+              <article>
+                <h2>Google 로그인</h2>
+                <p className="hint">Google 로그인 1회 후 웹/모바일에서 동일 계정 데이터로 동기화됩니다.</p>
               <button
                 type="button"
                 className="button button-primary full-width settings-submit"
@@ -2166,12 +2167,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                     ? "Google 재로그인"
                     : "Google 로그인"}
               </button>
-              <p className="hint">
-                현재 상태:{" "}
-                {session?.authProvider === "google"
-                  ? `Google 연결됨 (${session.email ?? "이메일 없음"})`
-                  : "Google 로그인 필요"}
-              </p>
             </article>
 
             <article>

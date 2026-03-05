@@ -6,6 +6,8 @@ function shouldUseSecureCookie(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
+export const SESSION_MAX_AGE_DAYS = 90;
+
 function parseCookieHeader(cookieHeader: string | null): Record<string, string> {
   if (!cookieHeader) {
     return {};
@@ -46,6 +48,6 @@ export function setSessionCookie(response: NextResponse, sessionId: string): voi
     sameSite: "lax",
     secure: shouldUseSecureCookie(),
     path: "/",
-    maxAge: 60 * 60 * 24 * 30
+    maxAge: SESSION_MAX_AGE_DAYS * 24 * 60 * 60
   });
 }

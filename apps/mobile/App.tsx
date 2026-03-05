@@ -31,6 +31,12 @@ const ChartLine = LineChart as unknown as React.ComponentType<any>;
 
 type TabKey = "dashboard" | "records" | "settings";
 
+const NAV_ITEMS: ReadonlyArray<{ key: TabKey; label: string }> = [
+  { key: "dashboard", label: "대시보드" },
+  { key: "records", label: "기록" },
+  { key: "settings", label: "설정" }
+];
+
 type Session = {
   sessionId: string;
   userId: string;
@@ -497,6 +503,7 @@ function SelectRow({
 export default function App(): React.JSX.Element {
   const { width: viewportWidth } = useWindowDimensions();
   const [tab, setTab] = React.useState<TabKey>("dashboard");
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [session, setSession] = React.useState<Session | null>(null);
   const [message, setMessage] = React.useState<Message | null>(null);
 
@@ -655,6 +662,18 @@ export default function App(): React.JSX.Element {
     }
     return `세션: ${session.sessionId.slice(0, 10)}...`;
   }, [session]);
+
+  const closeMenu = React.useCallback(() => {
+    setIsMenuOpen(false);
+  }, []);
+
+  const navigateWithMenu = React.useCallback(
+    (nextTab: TabKey) => {
+      setTab(nextTab);
+      closeMenu();
+    },
+    [closeMenu]
+  );
 
   const refreshCoreSessionData = React.useCallback(async (fresh = false) => {
     if (!session) {
@@ -1598,44 +1617,45 @@ export default function App(): React.JSX.Element {
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: statusBarOffset }]}>
       <StatusBar style="dark" />
+      <Modal visible={isMenuOpen} transparent animationType="fade" onRequestClose={closeMenu}>
+        <View style={styles.menuOverlay}>
+          <Pressable style={styles.menuScrim} onPress={closeMenu} />
+          <View style={styles.menuPanel}>
+            <View style={styles.menuHeader}>
+              <Text style={styles.menuTitle}>메뉴</Text>
+            </View>
+            {NAV_ITEMS.map((item) => (
+              <Pressable
+                key={item.key}
+                style={[styles.menuItem, tab === item.key && styles.menuItemActive]}
+                onPress={() => navigateWithMenu(item.key)}
+              >
+                <Text style={[styles.menuItemText, tab === item.key && styles.menuItemTextActive]}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.topBar}>
         <View>
           <Text style={styles.brand}>RoutineMate</Text>
           <Text style={styles.topBarSub}>{sessionInfoText}</Text>
         </View>
         <View style={styles.topActions}>
+          <Pressable style={styles.menuButton} onPress={() => setIsMenuOpen(true)}>
+            <Text style={styles.menuButtonText}>☰</Text>
+          </Pressable>
           <Pressable style={styles.topPrimaryButton} onPress={upgradeGoogleMobile}>
             <Text style={styles.topPrimaryButtonText}>
               {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
             </Text>
           </Pressable>
-          <View style={styles.sessionBadge}>
-            <Text style={styles.sessionBadgeText}>{isSyncing ? "동기화 중..." : "동기화 완료"}</Text>
-          </View>
         </View>
-      </View>
-
-      <View style={styles.tabRow}>
-        {([
-          ["dashboard", "대시보드"],
-          ["records", "기록"],
-          ["settings", "설정"]
-        ] as Array<[TabKey, string]>).map(([key, label]) => (
-          <Pressable
-            key={key}
-            style={[styles.tabButton, tab === key && styles.tabButtonActive]}
-            onPress={() => setTab(key)}
-          >
-            <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
-          </Pressable>
-        ))}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={messageTextStyle}>{message?.text ?? ""}</Text>
-        <Text style={styles.hint}>
-          상태: {session?.authProvider === "google" ? `Google 연결됨 (${session.email ?? "이메일 없음"})` : "Google 로그인 필요"}
-        </Text>
 
         {tab === "dashboard" ? (
           <View style={styles.card}>
@@ -1673,9 +1693,6 @@ export default function App(): React.JSX.Element {
                 </Text>
               </Pressable>
             </View>
-            <Text style={styles.hint}>
-              현재 기준: {range === "7d" ? "Day" : range === "30d" ? "Week" : "Month"} {isSyncing ? "(동기화 중)" : ""}
-            </Text>
             <View style={styles.kpiRow}>
               <View style={styles.kpiCard}>
                 <Text style={styles.kpiLabel}>체크인율</Text>
@@ -2254,17 +2271,6 @@ export default function App(): React.JSX.Element {
               <Text style={styles.primaryButtonText}>리마인더 저장</Text>
             </Pressable>
 
-            <Text style={styles.sectionTitle}>Google 로그인</Text>
-            <Text style={styles.hint}>
-              {session?.authProvider === "google"
-                ? `현재 상태: Google 연결됨 (${session.email ?? "이메일 없음"})`
-                : "현재 상태: Google 로그인 필요"}
-            </Text>
-            <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={upgradeGoogleMobile}>
-              <Text style={styles.primaryButtonText}>
-                {session?.authProvider === "google" ? "Google 재로그인" : "Google 로그인"}
-              </Text>
-            </Pressable>
           </View>
         ) : null}
 
@@ -2334,8 +2340,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.sm,
     alignItems: "center",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     justifyContent: "flex-end"
+  },
+  menuButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  menuButtonText: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    lineHeight: 18,
+    fontWeight: "700"
   },
   topPrimaryButton: {
     backgroundColor: colors.brand,
@@ -2350,29 +2372,56 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700"
   },
-  sessionBadge: {
-    borderRadius: 999,
+  menuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    zIndex: 999,
+  },
+  menuScrim: {
+    flex: 1,
+    backgroundColor: "rgba(13, 22, 20, 0.2)"
+  },
+  menuPanel: {
+    width: 280,
+    backgroundColor: colors.card,
+    borderRightWidth: 1,
+    borderRightColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    gap: spacing.xs
+  },
+  menuHeader: {
+    marginBottom: spacing.sm
+  },
+  menuTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary
+  },
+  menuItem: {
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: "#fff",
-    paddingHorizontal: 10,
-    paddingVertical: 6
+    paddingVertical: 10,
+    paddingHorizontal: 12
   },
-  sessionBadgeText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: "600"
+  menuItemActive: {
+    backgroundColor: colors.brand,
+    borderColor: colors.brand
+  },
+  menuItemText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  menuItemTextActive: {
+    color: colors.brandOn
   },
   brand: {
     fontSize: 24,
     fontWeight: "700",
     color: colors.textPrimary
-  },
-  tabRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm
   },
   dashboardRangeRow: {
     flexDirection: "row",
@@ -2398,26 +2447,6 @@ const styles = StyleSheet.create({
     fontWeight: "700"
   },
   dashboardRangeChipTextActive: {
-    color: colors.brandOn
-  },
-  tabButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card
-  },
-  tabButtonActive: {
-    backgroundColor: colors.brand,
-    borderColor: colors.brand
-  },
-  tabText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    fontWeight: "600"
-  },
-  tabTextActive: {
     color: colors.brandOn
   },
   content: {

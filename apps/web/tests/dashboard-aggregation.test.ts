@@ -272,6 +272,59 @@ test("aggregateDashboard respects explicit endDateKey for local-day windows", ()
   assert.equal(summary.buckets[summary.buckets.length - 1]?.key, "2026-03-04");
 });
 
+test("aggregateDashboard counts records on 2026-03-04 when queried with explicit local end date (KST 08:40)", () => {
+  const now = new Date("2026-03-03T23:40:00.000Z");
+  const summaryWithQuery = aggregateDashboard({
+    range: "7d",
+    now,
+    endDateKey: "2026-03-04",
+    meals: [],
+    workouts: [
+      {
+        id: "w1",
+        userId: "u1",
+        date: "2026-03-04",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        exerciseName: "AM Workout",
+        durationMinutes: 30,
+        intensity: "medium",
+        createdAt: "2026-03-04T00:00:00.000Z"
+      }
+    ],
+    bodyMetrics: [],
+    goals: []
+  });
+
+  assert.equal(summaryWithQuery.totalWorkouts, 1);
+  assert.equal(summaryWithQuery.consistencyMeta?.windowEnd, "2026-03-04");
+
+  const summaryWithoutQuery = aggregateDashboard({
+    range: "7d",
+    now,
+    meals: [],
+    workouts: [
+      {
+        id: "w1",
+        userId: "u1",
+        date: "2026-03-04",
+        bodyPart: "full_body",
+        purpose: "fat_loss",
+        tool: "bodyweight",
+        exerciseName: "AM Workout",
+        durationMinutes: 30,
+        intensity: "medium",
+        createdAt: "2026-03-04T00:00:00.000Z"
+      }
+    ],
+    bodyMetrics: [],
+    goals: []
+  });
+
+  assert.equal(summaryWithoutQuery.totalWorkouts, 0);
+});
+
 test("aggregateDashboard builds full body metric trend and keeps last record per day", () => {
   const summary = aggregateDashboard({
     range: "7d",
