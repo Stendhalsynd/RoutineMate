@@ -258,6 +258,57 @@
 
 ### S4-4 릴리즈 파이프라인(웹+APK)
 - 웹: `deploy:prod:verify`
+
+---
+
+## 10) S6 실행 기록 (2026-03-25)
+
+### S6-1 세션/초기 로딩
+- Spec: `spec/S6-1.md`
+- Red:
+  - bootstrap cache round-trip / TTL 테스트 추가
+  - `/v1/auth/session` read-path canonical repair 제거 회귀 테스트 추가
+  - `/v1/bootstrap?view=records`가 `goal`을 포함하는지 검증
+- Green:
+  - 모바일 restore flow를 bootstrap cache 기반 provisional UI + validated session 흐름으로 정리
+  - 수동 Google 로그인 직후 중복 hydration 제거
+  - 초기 range prefetch 제거
+
+### S6-2 stale response / debounce
+- Spec: `spec/S6-2.md`
+- Red:
+  - request sequence / mutation debounce 유틸 테스트 추가
+  - bootstrap reminder null-reset 유틸 테스트 추가
+- Green:
+  - `loadDayData`, bootstrap, dashboard refresh 모두 latest-response only 적용
+  - mutation 이후 refresh debounce 적용
+  - provisional session에서는 API-backed read/write 차단
+  - cross-session cache owner key 도입으로 이전 사용자 dashboard/day/reminder 누수 차단
+
+### S6-3 체중/체지방 입력 UX
+- Spec: `spec/S6-3.md`
+- Red:
+  - mobile `metric-wheel` 유틸 테스트
+  - web `metric-stepper` 유틸 테스트
+- Green:
+  - 모바일 quick action(`최근값`, `-0.1`, `+0.1`, `정밀 선택`) 연결
+  - 모바일 3열 digit picker(`십의/일의/소수`) 연결
+  - 웹 숫자 입력 + stepper 조합 유지/검증
+
+### S6-4 화면 밀도
+- Spec: `spec/S6-4.md`
+- 적용:
+  - 모바일 `records` 상단에 날짜 아래 당일 요약 배지 추가
+  - 모바일 상단 섹션의 반복 설명 문구 제거
+  - 웹 헤더 카피를 상태/행동 중심으로 축소
+
+### 현재 검증 상태
+- `npm run test --workspace @routinemate/mobile`
+- `npm run test --workspace @routinemate/web`
+- `npm run typecheck --workspace @routinemate/mobile`
+- `npm run typecheck --workspace @routinemate/web`
+
+모든 항목 green 기준으로 확인.
 - 모바일: 로컬 Gradle 기반 `preview/release` APK 빌드 (`scripts/build-apk.sh`)
 - 릴리즈: GitHub Release APK 첨부 스크립트 + Discord CHANGELOG
 - 테스트: Android SDK/JDK/토큰 누락 시 명확 오류, 성공 시 산출물 업로드

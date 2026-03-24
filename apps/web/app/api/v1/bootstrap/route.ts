@@ -111,6 +111,9 @@ export async function GET(request: Request) {
         goals,
         endDateKey: referenceDate
       });
+      if (parsed.data.view === "records") {
+        payload.goal = goals[0] ?? null;
+      }
     }
 
     if (parsed.data.view === "records") {

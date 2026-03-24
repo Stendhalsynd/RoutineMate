@@ -215,9 +215,32 @@
 ### 집계 표기 규칙
 - range는 그대로 유지: `7d`, `30d`, `90d`
 - 시각화 단위는 자동 전환
-  - `7d -> day`
-  - `30d -> week(ISO week, 월요일 시작)`
-  - `90d -> month(YYYY-MM)`
+- `7d -> day`
+- `30d -> week(ISO week, 월요일 시작)`
+- `90d -> month(YYYY-MM)`
+
+---
+
+## 12) S6 운영/UX 업데이트 (2026-03-25)
+
+### S6-1 세션/초기 로딩
+- 모바일 초기 진입은 개별 다중 요청보다 `/v1/bootstrap?view=records` 중심으로 정리.
+- 마지막 성공 세션 + bootstrap 스냅샷을 로컬에 저장하고, 앱 시작 직후 provisional UI를 먼저 복원.
+- `/v1/auth/session`은 세션 확인 전용으로 유지하고, 조회 시점의 Google canonical repair는 제거.
+
+### S6-2 기록 충돌 방지
+- `loadDayData` / dashboard refresh에 request sequence를 도입해 오래된 응답이 최신 optimistic state를 덮지 못하게 함.
+- mutation 이후 전체 재조회는 debounce하여 Notion read-after-write 지연과 중복 fetch를 줄임.
+- provisional 세션은 읽기 전용으로 두고, 검증 전 API mutation/read를 차단.
+
+### S6-3 체중/체지방 입력 UX
+- 모바일은 `최근값`, `-0.1`, `+0.1`, `정밀 선택` 흐름으로 전환.
+- 모바일 정밀 선택은 `십의자리 | 일의자리 | 소수 첫째자리` 3열 digit picker 사용.
+- 웹은 긴 decimal `select` 대신 숫자 입력 + `-0.1/+0.1` stepper 버튼 사용.
+
+### S6-4 화면 밀도 정리
+- 모바일 `records` 상단은 날짜/상태/당일 요약을 먼저 노출하고 반복 설명 문구를 줄임.
+- 웹 헤더는 브랜드, 세션 상태, Google 액션 중심으로 요약.
 - 대시보드 응답에 `granularity`, `buckets`를 포함
 
 ### 삭제 정책

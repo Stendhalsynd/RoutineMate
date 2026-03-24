@@ -30,14 +30,31 @@ import { cardRadius, colors, spacing } from "@routinemate/ui";
 import { LineChart } from "react-native-chart-kit";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { clearStoredSessionId, persistSessionId, readStoredSessionId } from "./src/lib/session-store";
+import {
+  isBootstrapCacheFresh,
+  type StoredBootstrapPayload
+} from "./src/lib/bootstrap-cache";
+import {
+  clearStoredBootstrapCache,
+  persistBootstrapCache,
+  readStoredBootstrapCache
+} from "./src/lib/bootstrap-cache-store";
+import { buildSessionSnapshotKey, resolveBootstrapReminderSettings } from "./src/lib/bootstrap-state";
 import { computeMetricChartWidth } from "./src/lib/metric-chart-width";
 import {
-  buildDecimalValue,
-  buildFractionDigitOptions,
-  buildIntegerRangeOptions,
-  splitDecimalValue,
-  type PickerOption as DecimalPickerOption
-} from "./src/lib/decimal-picker";
+  computeMutationRefreshDelay,
+  issueRequestSequence,
+  shouldApplyRequestSequence
+} from "./src/lib/request-sequencer";
+import {
+  clampMetricValue,
+  digitsToMetricNumber,
+  formatMetricValue,
+  isMetricDigitsAllowed,
+  resolveMetricDigits,
+  resolveQuickMetricValue,
+  wrapDigit
+} from "./src/lib/metric-wheel";
 import { isTransientNetworkError, toUserFacingErrorMessage } from "./src/lib/api-error";
 
 const ChartLine = LineChart as unknown as React.ComponentType<any>;
@@ -54,8 +71,12 @@ type Session = {
   sessionId: string;
   userId: string;
   isGuest: boolean;
+  createdAt: string;
+  upgradedAt?: string;
   email?: string;
   authProvider?: string;
+  providerSubject?: string;
+  avatarUrl?: string;
 };
 
 type Dashboard = {
@@ -107,6 +128,13 @@ type ReminderEvaluation = {
 
 const DEFAULT_REMINDER_TIMEZONE = "Asia/Seoul";
 const DEFAULT_REMINDER_CHANNELS: Array<ReminderSettings["channels"][number]> = ["web_in_app", "mobile_local"];
+const DEFAULT_REMINDER_STATE: ReminderSettings = {
+  isEnabled: true,
+  dailyReminderTime: "20:00",
+  missingLogReminderTime: "21:30",
+  channels: DEFAULT_REMINDER_CHANNELS,
+  timezone: DEFAULT_REMINDER_TIMEZONE
+};
 
 type MealSlot = "breakfast" | "lunch" | "dinner" | "dinner2";
 
@@ -170,6 +198,17 @@ type DaySnapshot = {
   mealCheckins: MealCheckin[];
   workoutLogs: WorkoutLog[];
   bodyMetrics: BodyMetric[];
+};
+
+type BootstrapPayload = {
+  session: Session | null;
+  dashboard?: Dashboard;
+  day?: DaySnapshot;
+  goal?: Goal | null;
+  mealTemplates?: MealTemplate[];
+  workoutTemplates?: WorkoutTemplate[];
+  reminderSettings?: ReminderSettings | null;
+  fetchedAt: string;
 };
 
 type MessageType = "error" | "success" | "info";
@@ -341,10 +380,12 @@ type OptionPickerState = {
 type DecimalPickerState = {
   title: string;
   unit: "kg" | "%";
-  integerOptions: DecimalPickerOption[];
-  fractionOptions: DecimalPickerOption[];
-  integerValue: string;
-  fractionValue: string;
+  min: number;
+  max: number;
+  tensValue: number;
+  onesValue: number;
+  tenthsValue: number;
+  recentValue: string;
   allowEmpty: boolean;
   onSelect: (value: string) => void;
 };
@@ -508,6 +549,47 @@ function PickerField({
   );
 }
 
+function MetricQuickField({
+  label,
+  value,
+  placeholder,
+  recentValue,
+  onPress,
+  onRecent,
+  onNudge
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  recentValue: string;
+  onPress: () => void;
+  onRecent: () => void;
+  onNudge: (delta: number) => void;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Pressable style={styles.pickerInput} onPress={onPress}>
+        <Text style={[styles.pickerInputText, value ? null : styles.pickerPlaceholder]}>{value || placeholder}</Text>
+      </Pressable>
+      <View style={styles.metricQuickActions}>
+        <Pressable style={styles.metricQuickActionButton} onPress={onRecent}>
+          <Text style={styles.metricQuickActionText}>최근값 {recentValue || "-"}</Text>
+        </Pressable>
+        <Pressable style={styles.metricQuickActionButton} onPress={() => onNudge(-0.1)}>
+          <Text style={styles.metricQuickActionText}>-0.1</Text>
+        </Pressable>
+        <Pressable style={styles.metricQuickActionButton} onPress={() => onNudge(0.1)}>
+          <Text style={styles.metricQuickActionText}>+0.1</Text>
+        </Pressable>
+        <Pressable style={styles.metricQuickActionButton} onPress={onPress}>
+          <Text style={styles.metricQuickActionText}>정밀 선택</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function SelectRow({
   label,
   options,
@@ -541,6 +623,7 @@ export default function App(): React.JSX.Element {
   const [tab, setTab] = React.useState<TabKey>("dashboard");
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [session, setSession] = React.useState<Session | null>(null);
+  const [isSessionValidated, setIsSessionValidated] = React.useState(false);
   const [message, setMessage] = React.useState<Message | null>(null);
 
   const [range, setRange] = React.useState<"7d" | "30d" | "90d">("7d");
@@ -590,15 +673,16 @@ export default function App(): React.JSX.Element {
   const [isGoalDraftDirty, setGoalDraftDirty] = React.useState(false);
   const [isSyncing, setIsSyncing] = React.useState(false);
   const [reminderEvaluation, setReminderEvaluation] = React.useState<ReminderEvaluation | null>(null);
+  const authenticatedSession = isSessionValidated ? session : null;
   const dashboardCacheRef = React.useRef<Partial<Record<"7d" | "30d" | "90d", Dashboard>>>({});
+  const dashboardCacheOwnerKeyRef = React.useRef<string | null>(null);
+  const selectedDateRef = React.useRef(today);
+  const dayRequestSequenceRef = React.useRef(0);
+  const dashboardRequestSequenceRef = React.useRef(0);
+  const mutationRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastMutationAtRef = React.useRef(0);
 
-  const [reminder, setReminder] = React.useState<ReminderSettings>({
-    isEnabled: true,
-    dailyReminderTime: "20:00",
-    missingLogReminderTime: "21:30",
-    channels: DEFAULT_REMINDER_CHANNELS,
-    timezone: DEFAULT_REMINDER_TIMEZONE
-  });
+  const [reminder, setReminder] = React.useState<ReminderSettings>(DEFAULT_REMINDER_STATE);
   const [optionPicker, setOptionPicker] = React.useState<OptionPickerState | null>(null);
   const [decimalPicker, setDecimalPicker] = React.useState<DecimalPickerState | null>(null);
   const [isDdayPickerVisible, setDdayPickerVisible] = React.useState(false);
@@ -617,7 +701,14 @@ export default function App(): React.JSX.Element {
   const dateOptions = React.useMemo(() => buildDateOptions(365, 365), []);
   const timeOptions = React.useMemo(() => buildTimeOptions(5), []);
   const weeklyTargetOptions = React.useMemo(() => buildIntegerOptions(1, 21, "회"), []);
-  const decimalFractionOptions = React.useMemo(() => buildFractionDigitOptions(), []);
+  const wheelDigits = React.useMemo(
+    () =>
+      Array.from({ length: 30 }, (_, index) => ({
+        key: String(index),
+        digit: wrapDigit(index)
+      })),
+    []
+  );
   const weightTrendPoints = React.useMemo(
     () =>
       (dashboard?.bodyMetricTrend ?? [])
@@ -631,6 +722,26 @@ export default function App(): React.JSX.Element {
         .filter((item) => item.bodyFatPct !== null)
         .map((item) => ({ date: item.date, value: item.bodyFatPct as number })),
     [dashboard?.bodyMetricTrend]
+  );
+  const latestWeightValue = React.useMemo(() => {
+    const recentDayValue = day.bodyMetrics.find((item) => !item.isDeleted && item.weightKg !== undefined)?.weightKg;
+    const nextValue = recentDayValue ?? dashboard?.latestWeightKg;
+    return nextValue !== undefined && nextValue !== null ? formatMetricValue(clampMetricValue(nextValue, WEIGHT_RANGE.min, WEIGHT_RANGE.max)) : "";
+  }, [dashboard?.latestWeightKg, day.bodyMetrics]);
+  const latestBodyFatValue = React.useMemo(() => {
+    const recentDayValue = day.bodyMetrics.find((item) => !item.isDeleted && item.bodyFatPct !== undefined)?.bodyFatPct;
+    const nextValue = recentDayValue ?? dashboard?.latestBodyFatPct;
+    return nextValue !== undefined && nextValue !== null
+      ? formatMetricValue(clampMetricValue(nextValue, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))
+      : "";
+  }, [dashboard?.latestBodyFatPct, day.bodyMetrics]);
+  const recordSummary = React.useMemo(
+    () => ({
+      meals: day.mealCheckins.filter((item) => !item.isDeleted).length,
+      workouts: day.workoutLogs.filter((item) => !item.isDeleted).length,
+      bodyMetrics: day.bodyMetrics.filter((item) => !item.isDeleted).length
+    }),
+    [day.bodyMetrics, day.mealCheckins, day.workoutLogs]
   );
 
   const checkinBySlot = React.useMemo(() => {
@@ -680,6 +791,10 @@ export default function App(): React.JSX.Element {
     }
     return styles.messageSuccess;
   }, [message]);
+  const sessionUnavailableMessage = React.useMemo(
+    () => (session ? "세션을 확인 중입니다." : "먼저 Google 로그인 후 이용해 주세요."),
+    [session]
+  );
 
   React.useEffect(() => {
     if (!GOOGLE_WEB_CLIENT_ID) {
@@ -793,6 +908,134 @@ export default function App(): React.JSX.Element {
     [closeMenuImmediately, isMenuOpen, menuTranslateX, runMenuAnimation]
   );
 
+  const applyBootstrapPayload = React.useCallback(
+    (payload: BootstrapPayload) => {
+      const ownerKey = buildSessionSnapshotKey(payload.session ?? undefined);
+      if (ownerKey && dashboardCacheOwnerKeyRef.current !== ownerKey) {
+        dashboardCacheRef.current = {};
+      }
+      if (ownerKey) {
+        dashboardCacheOwnerKeyRef.current = ownerKey;
+      }
+      if (payload.dashboard) {
+        setDashboard(payload.dashboard);
+        if (payload.dashboard.range === "7d" || payload.dashboard.range === "30d" || payload.dashboard.range === "90d") {
+          dashboardCacheRef.current[payload.dashboard.range] = payload.dashboard;
+        }
+      }
+      if (payload.goal !== undefined) {
+        setGoal(payload.goal ?? null);
+        if (!isGoalDraftDirty) {
+          setGoalTarget(String(payload.goal?.weeklyRoutineTarget ?? 4));
+          setGoalWeight(payload.goal?.targetWeightKg?.toString() ?? "");
+          setGoalFat(payload.goal?.targetBodyFat?.toString() ?? "");
+          setGoalDday(payload.goal?.dDay ?? "");
+        }
+      }
+      if (payload.day) {
+        selectedDateRef.current = payload.day.date;
+        setSelectedDate(payload.day.date);
+        setDay(payload.day);
+        setBodyMetricDate(payload.day.date);
+      }
+      if (payload.mealTemplates) {
+        setMealTemplates(payload.mealTemplates);
+      }
+      if (payload.workoutTemplates) {
+        setWorkoutTemplates(payload.workoutTemplates);
+      }
+      const nextReminder = resolveBootstrapReminderSettings(payload.reminderSettings, DEFAULT_REMINDER_STATE);
+      if (nextReminder !== undefined) {
+        setReminder(nextReminder);
+      }
+    },
+    [isGoalDraftDirty]
+  );
+
+  const clearWorkspaceSnapshot = React.useCallback(() => {
+    dashboardRequestSequenceRef.current = issueRequestSequence(dashboardRequestSequenceRef.current);
+    dayRequestSequenceRef.current = issueRequestSequence(dayRequestSequenceRef.current);
+    if (mutationRefreshTimerRef.current) {
+      clearTimeout(mutationRefreshTimerRef.current);
+      mutationRefreshTimerRef.current = null;
+    }
+    dashboardCacheRef.current = {};
+    dashboardCacheOwnerKeyRef.current = null;
+    setDashboard(null);
+    setGoal(null);
+    setGoalTarget("4");
+    setGoalWeight("");
+    setGoalFat("");
+    setGoalDday("");
+    setGoalDraftDirty(false);
+    setMealTemplates([]);
+    setWorkoutTemplates([]);
+    setReminderEvaluation(null);
+    setReminder(DEFAULT_REMINDER_STATE);
+    setWeightForm("");
+    setBodyFatForm("");
+    setIsSyncing(false);
+    selectedDateRef.current = today;
+    setSelectedDate(today);
+    setBodyMetricDate(today);
+    setDay(defaultDay(today));
+  }, [today]);
+
+  const persistBootstrapSnapshot = React.useCallback(
+    async (nextSession: Session, payload: BootstrapPayload) => {
+      const recordsPayload: StoredBootstrapPayload = {
+        session: payload.session,
+        fetchedAt: payload.fetchedAt,
+        ...(payload.dashboard ? { dashboard: payload.dashboard as unknown as Record<string, unknown> } : {}),
+        ...(payload.day ? { day: payload.day } : {}),
+        ...(payload.goal !== undefined ? { goal: (payload.goal as unknown as Record<string, unknown> | null) ?? null } : {}),
+        ...(payload.mealTemplates ? { mealTemplates: payload.mealTemplates as unknown as Array<Record<string, unknown>> } : {}),
+        ...(payload.workoutTemplates
+          ? { workoutTemplates: payload.workoutTemplates as unknown as Array<Record<string, unknown>> }
+          : {}),
+        ...(payload.reminderSettings !== undefined
+          ? {
+              reminderSettings: (payload.reminderSettings as unknown as Record<string, unknown> | null) ?? null
+            }
+          : {})
+      };
+
+      await persistBootstrapCache({
+        session: nextSession,
+        bootstrapByView: {
+          records: recordsPayload
+        },
+        validatedAt: Date.now()
+      });
+    },
+    []
+  );
+
+  const loadBootstrapShell = React.useCallback(
+    async (nextSession: Session, fresh = false, targetDate = selectedDateRef.current) => {
+      const requestSequence = issueRequestSequence(dashboardRequestSequenceRef.current);
+      dashboardRequestSequenceRef.current = requestSequence;
+      const freshSuffix = fresh ? "&fresh=1" : "";
+      try {
+        setIsSyncing(true);
+        const payload = await apiFetch<BootstrapPayload>(
+          `/api/v1/bootstrap?sessionId=${encodeURIComponent(nextSession.sessionId)}&view=records&date=${encodeURIComponent(targetDate)}&range=${range}${freshSuffix}`
+        );
+        if (!shouldApplyRequestSequence(dashboardRequestSequenceRef.current, requestSequence)) {
+          return null;
+        }
+        applyBootstrapPayload(payload);
+        await persistBootstrapSnapshot(nextSession, payload);
+        return payload;
+      } finally {
+        if (shouldApplyRequestSequence(dashboardRequestSequenceRef.current, requestSequence)) {
+          setIsSyncing(false);
+        }
+      }
+    },
+    [applyBootstrapPayload, persistBootstrapSnapshot, range]
+  );
+
   const navigateWithMenu = React.useCallback(
     (nextTab: TabKey) => {
       setTab(nextTab);
@@ -802,19 +1045,23 @@ export default function App(): React.JSX.Element {
   );
 
   const refreshCoreSessionData = React.useCallback(async (fresh = false) => {
-    if (!session) {
+    if (!authenticatedSession) {
       return;
     }
+    const requestSequence = issueRequestSequence(dashboardRequestSequenceRef.current);
+    dashboardRequestSequenceRef.current = requestSequence;
 
     const fetchCoreData = async (freshFlag: boolean) => {
       const dashboardDate = todayYmd();
       const freshSuffix = freshFlag ? "&fresh=1" : "";
       const [dashboardData, goalData, reminderSettingsData] = await Promise.all([
         apiFetch<Dashboard>(
-          `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${range}&date=${encodeURIComponent(dashboardDate)}${freshSuffix}`
+          `/api/v1/dashboard?sessionId=${encodeURIComponent(authenticatedSession.sessionId)}&range=${range}&date=${encodeURIComponent(dashboardDate)}${freshSuffix}`
         ),
-        apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(session.sessionId)}`),
-        apiFetch<{ settings: ReminderSettings | null }>(`/api/v1/reminders/settings?sessionId=${encodeURIComponent(session.sessionId)}`)
+        apiFetch<{ goal: Goal | null }>(`/api/v1/goals?sessionId=${encodeURIComponent(authenticatedSession.sessionId)}`),
+        apiFetch<{ settings: ReminderSettings | null }>(
+          `/api/v1/reminders/settings?sessionId=${encodeURIComponent(authenticatedSession.sessionId)}`
+        )
       ]);
 
       return {
@@ -830,13 +1077,18 @@ export default function App(): React.JSX.Element {
       goalData: { goal: Goal | null };
       reminderSettingsData: { settings: ReminderSettings | null };
     }) => {
+      if (!shouldApplyRequestSequence(dashboardRequestSequenceRef.current, requestSequence)) {
+        return;
+      }
       setDashboard(result.dashboardData ?? null);
       if (result.dashboardData) {
+        dashboardCacheOwnerKeyRef.current = buildSessionSnapshotKey(authenticatedSession);
         dashboardCacheRef.current[range] = result.dashboardData;
       }
       setGoal(result.goalData?.goal ?? null);
-      if (result.reminderSettingsData?.settings) {
-        setReminder(result.reminderSettingsData.settings);
+      const nextReminder = resolveBootstrapReminderSettings(result.reminderSettingsData?.settings, DEFAULT_REMINDER_STATE);
+      if (nextReminder !== undefined) {
+        setReminder(nextReminder);
       }
 
       if (!isGoalDraftDirty) {
@@ -851,25 +1103,10 @@ export default function App(): React.JSX.Element {
       setIsSyncing(true);
       const result = await fetchCoreData(fresh);
       applyCoreData(result);
-
-      if (!fresh) {
-        const candidateRanges: Array<"7d" | "30d" | "90d"> = ["7d", "30d", "90d"];
-        for (const candidate of candidateRanges) {
-          if (candidate === range || dashboardCacheRef.current[candidate]) {
-            continue;
-          }
-          void apiFetch<Dashboard>(
-            `/api/v1/dashboard?sessionId=${encodeURIComponent(session.sessionId)}&range=${candidate}&date=${encodeURIComponent(result.dashboardDate)}`
-          )
-            .then((next) => {
-              dashboardCacheRef.current[candidate] = next;
-            })
-            .catch(() => {
-              // ignore background prefetch failures
-            });
-        }
-      }
     } catch (error) {
+      if (!shouldApplyRequestSequence(dashboardRequestSequenceRef.current, requestSequence)) {
+        return;
+      }
       if (isTransientNetworkError(error)) {
         try {
           await new Promise((resolve) => setTimeout(resolve, 350));
@@ -890,73 +1127,93 @@ export default function App(): React.JSX.Element {
         text: toUserFacingErrorMessage(error, "조회에 실패했습니다.")
       });
     } finally {
-      setIsSyncing(false);
+      if (shouldApplyRequestSequence(dashboardRequestSequenceRef.current, requestSequence)) {
+        setIsSyncing(false);
+      }
     }
-  }, [isGoalDraftDirty, range, session]);
-
-  const loadTemplateCatalog = React.useCallback(async () => {
-    if (!session) {
-      return;
-    }
-
-    try {
-      const [mealTemplatesData, workoutTemplatesData] = await Promise.all([
-        apiFetch<{ templates: MealTemplate[] }>(`/api/v1/templates/meals?sessionId=${encodeURIComponent(session.sessionId)}`),
-        apiFetch<{ templates: WorkoutTemplate[] }>(`/api/v1/templates/workouts?sessionId=${encodeURIComponent(session.sessionId)}`)
-      ]);
-      setMealTemplates(mealTemplatesData.templates ?? []);
-      setWorkoutTemplates(workoutTemplatesData.templates ?? []);
-    } catch (error) {
-      setMessage({ type: "error", text: toUserFacingErrorMessage(error, "템플릿 조회에 실패했습니다.") });
-    }
-  }, [session]);
+  }, [authenticatedSession, isGoalDraftDirty, range]);
 
   const loadDayData = React.useCallback(
     async (date: string) => {
-      if (!session) {
+      if (!authenticatedSession) {
         return;
       }
+      const requestSequence = issueRequestSequence(dayRequestSequenceRef.current);
+      dayRequestSequenceRef.current = requestSequence;
 
       try {
         setIsSyncing(true);
         const [dayData, reminderEvaluationData] = await Promise.all([
-          apiFetch<DaySnapshot>(`/api/v1/calendar/day?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`),
+          apiFetch<DaySnapshot>(
+            `/api/v1/calendar/day?sessionId=${encodeURIComponent(authenticatedSession.sessionId)}&date=${encodeURIComponent(date)}`
+          ),
           apiFetch<ReminderEvaluation>(
-            `/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(session.sessionId)}&date=${encodeURIComponent(date)}`
+            `/api/v1/reminders/evaluate?sessionId=${encodeURIComponent(authenticatedSession.sessionId)}&date=${encodeURIComponent(date)}`
           )
         ]);
+        if (!shouldApplyRequestSequence(dayRequestSequenceRef.current, requestSequence)) {
+          return;
+        }
 
         setDay(dayData ?? defaultDay(date));
         setReminderEvaluation(reminderEvaluationData ?? { date, mealCount: 0, workoutCount: 0, isMissingLogCandidate: false });
       } catch (error) {
+        if (!shouldApplyRequestSequence(dayRequestSequenceRef.current, requestSequence)) {
+          return;
+        }
         setMessage({ type: "error", text: toUserFacingErrorMessage(error, "날짜 기록을 불러오지 못했습니다.") });
       } finally {
-        setIsSyncing(false);
+        if (shouldApplyRequestSequence(dayRequestSequenceRef.current, requestSequence)) {
+          setIsSyncing(false);
+        }
       }
     },
-    [session]
+    [authenticatedSession]
   );
 
   const refreshWorkspaceAfterMutation = React.useCallback(
-    async () => {
-      if (!session) {
+    async (debounceMs = 250) => {
+      if (!authenticatedSession) {
         return;
       }
-      await Promise.all([refreshCoreSessionData(true), loadDayData(selectedDate)]);
+      lastMutationAtRef.current = Date.now();
+      if (mutationRefreshTimerRef.current) {
+        clearTimeout(mutationRefreshTimerRef.current);
+      }
+      const delay = computeMutationRefreshDelay(lastMutationAtRef.current, Date.now(), debounceMs);
+      mutationRefreshTimerRef.current = setTimeout(() => {
+        mutationRefreshTimerRef.current = null;
+        void Promise.all([refreshCoreSessionData(true), loadDayData(selectedDate)]);
+      }, delay);
     },
-    [loadDayData, refreshCoreSessionData, selectedDate, session]
+    [authenticatedSession, loadDayData, refreshCoreSessionData, selectedDate]
   );
 
   React.useEffect(() => {
     let mounted = true;
     const restoreSession = async (): Promise<void> => {
       try {
+        const cachedBootstrap = await readStoredBootstrapCache();
+        if (
+          mounted &&
+          cachedBootstrap &&
+          isBootstrapCacheFresh(cachedBootstrap) &&
+          cachedBootstrap.bootstrapByView.records
+        ) {
+          setSession(cachedBootstrap.session);
+          setIsSessionValidated(false);
+          applyBootstrapPayload(cachedBootstrap.bootstrapByView.records as unknown as BootstrapPayload);
+        } else if (cachedBootstrap && !isBootstrapCacheFresh(cachedBootstrap)) {
+          await clearStoredBootstrapCache();
+        }
+
         const restored = await apiFetch<Session | null>("/api/v1/auth/session");
         if (!mounted) {
           return;
         }
         if (restored?.sessionId) {
           setSession(restored);
+          setIsSessionValidated(true);
           await persistSessionId(restored.sessionId);
           return;
         }
@@ -975,6 +1232,7 @@ export default function App(): React.JSX.Element {
             }
             if (restoredByStoredId?.sessionId) {
               setSession(restoredByStoredId);
+              setIsSessionValidated(true);
               await persistSessionId(restoredByStoredId.sessionId);
               return;
             }
@@ -985,15 +1243,30 @@ export default function App(): React.JSX.Element {
         }
 
         if (!GOOGLE_WEB_CLIENT_ID) {
+          setSession(null);
+          setIsSessionValidated(false);
+          await clearStoredBootstrapCache();
+          clearWorkspaceSnapshot();
           return;
         }
 
         const silentResult = await GoogleSignin.signInSilently();
-        if (!mounted || isNoSavedCredentialFoundResponse(silentResult) || !isSuccessResponse(silentResult)) {
+        if (!mounted) {
+          return;
+        }
+        if (isNoSavedCredentialFoundResponse(silentResult) || !isSuccessResponse(silentResult)) {
+          setSession(null);
+          setIsSessionValidated(false);
+          await clearStoredBootstrapCache();
+          clearWorkspaceSnapshot();
           return;
         }
         const idToken = silentResult.data.idToken;
         if (!idToken) {
+          setSession(null);
+          setIsSessionValidated(false);
+          await clearStoredBootstrapCache();
+          clearWorkspaceSnapshot();
           return;
         }
 
@@ -1007,8 +1280,10 @@ export default function App(): React.JSX.Element {
         });
         if (mounted) {
           setSession(googleSession);
+          setIsSessionValidated(true);
           await persistSessionId(googleSession.sessionId);
           setMessage({ type: "success", text: "Google 세션이 복원되었습니다." });
+          return;
         }
       } catch (error) {
         if (mounted) {
@@ -1029,39 +1304,60 @@ export default function App(): React.JSX.Element {
   }, []);
 
   React.useEffect(() => {
-    if (!session?.sessionId) {
+    if (!session?.sessionId || !isSessionValidated) {
       return;
     }
     void persistSessionId(session.sessionId);
-  }, [session?.sessionId]);
+  }, [isSessionValidated, session?.sessionId]);
 
   React.useEffect(() => {
-    if (!session) {
+    if (!authenticatedSession) {
       return;
     }
-    const cachedDashboard = dashboardCacheRef.current[range];
+    const validatedSessionKey = buildSessionSnapshotKey(authenticatedSession);
+    const hasMatchingCache = dashboardCacheOwnerKeyRef.current === validatedSessionKey;
+    const bootstrapDate = hasMatchingCache ? selectedDateRef.current : today;
+    if (!hasMatchingCache) {
+      clearWorkspaceSnapshot();
+      void clearStoredBootstrapCache();
+    }
+    const cachedDashboard = hasMatchingCache ? dashboardCacheRef.current[range] : undefined;
     if (cachedDashboard) {
       setDashboard(cachedDashboard);
     }
-    void refreshCoreSessionData();
-    void loadTemplateCatalog();
-  }, [loadTemplateCatalog, range, refreshCoreSessionData, session]);
+    void loadBootstrapShell(authenticatedSession, false, bootstrapDate).catch((error) => {
+      setMessage({
+        type: "error",
+        text: toUserFacingErrorMessage(error, "초기 데이터 조회에 실패했습니다.")
+      });
+    });
+  }, [authenticatedSession, clearWorkspaceSnapshot, loadBootstrapShell, range, today]);
 
   React.useEffect(() => {
-    if (tab !== "records") {
+    if (tab !== "records" || !authenticatedSession) {
       return;
     }
     void loadDayData(selectedDate);
-  }, [loadDayData, selectedDate, tab]);
+  }, [authenticatedSession, loadDayData, selectedDate, tab]);
 
   React.useEffect(() => {
+    selectedDateRef.current = selectedDate;
     setBodyMetricDate(selectedDate);
   }, [selectedDate]);
 
+  React.useEffect(
+    () => () => {
+      if (mutationRefreshTimerRef.current) {
+        clearTimeout(mutationRefreshTimerRef.current);
+      }
+    },
+    []
+  );
+
   const upsertMealCheckin = React.useCallback(
     async (slot: MealSlot, completed: boolean, templateId?: string) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1084,7 +1380,7 @@ export default function App(): React.JSX.Element {
       }
 
       const payload = {
-        sessionId: session.sessionId,
+        sessionId: authenticatedSession.sessionId,
         date: selectedDate,
         slot,
         completed,
@@ -1147,13 +1443,13 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [activeMealTemplates, checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, session]
+    [activeMealTemplates, authenticatedSession, checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, sessionUnavailableMessage]
   );
 
   const deleteMealCheckin = React.useCallback(
     async (slot: MealSlot) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
       const existing = checkinBySlot.get(slot);
@@ -1170,7 +1466,7 @@ export default function App(): React.JSX.Element {
       try {
         await apiFetch<unknown>(`/api/v1/meal-checkins/${existing.id}`, {
           method: "DELETE",
-          body: JSON.stringify({ sessionId: session.sessionId })
+          body: JSON.stringify({ sessionId: authenticatedSession.sessionId })
         });
         setMessage({ type: "info", text: "식단 체크인을 삭제했습니다." });
       } catch (error) {
@@ -1179,13 +1475,13 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [checkinBySlot, day, refreshWorkspaceAfterMutation, session, selectedDate]
+    [authenticatedSession, checkinBySlot, day, refreshWorkspaceAfterMutation, selectedDate, sessionUnavailableMessage]
   );
 
   const upsertWorkoutCheckin = React.useCallback(
     async (slot: WorkoutSlot, completed: boolean, templateId?: string) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1210,7 +1506,7 @@ export default function App(): React.JSX.Element {
         : undefined;
       const defaults = defaultWorkoutBySlot(slot);
       const payload = {
-        sessionId: session.sessionId,
+        sessionId: authenticatedSession.sessionId,
         date: selectedDate,
         slot,
         completed,
@@ -1267,13 +1563,21 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [activeWorkoutTemplates, day, refreshWorkspaceAfterMutation, selectedDate, session, workoutCheckinBySlot]
+    [
+      activeWorkoutTemplates,
+      authenticatedSession,
+      day,
+      refreshWorkspaceAfterMutation,
+      selectedDate,
+      sessionUnavailableMessage,
+      workoutCheckinBySlot
+    ]
   );
 
   const deleteWorkoutCheckin = React.useCallback(
     async (slot: WorkoutSlot) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1287,7 +1591,7 @@ export default function App(): React.JSX.Element {
       try {
         await apiFetch<unknown>(`/api/v1/workout-checkins/${existing.id}`, {
           method: "DELETE",
-          body: JSON.stringify({ sessionId: session.sessionId })
+          body: JSON.stringify({ sessionId: authenticatedSession.sessionId })
         });
         setMessage({ type: "info", text: "운동 체크인을 삭제했습니다." });
       } catch (error) {
@@ -1296,13 +1600,13 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [day, refreshWorkspaceAfterMutation, session, workoutCheckinBySlot]
+    [authenticatedSession, day, refreshWorkspaceAfterMutation, sessionUnavailableMessage, workoutCheckinBySlot]
   );
 
   const deleteWorkoutLog = React.useCallback(
     async (logId: string) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1311,7 +1615,7 @@ export default function App(): React.JSX.Element {
       try {
         await apiFetch<unknown>(`/api/v1/workout-logs/${logId}`, {
           method: "DELETE",
-          body: JSON.stringify({ sessionId: session.sessionId })
+          body: JSON.stringify({ sessionId: authenticatedSession.sessionId })
         });
         setMessage({ type: "info", text: "운동 기록을 삭제했습니다." });
       } catch (error) {
@@ -1320,12 +1624,12 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [day, refreshWorkspaceAfterMutation, session]
+    [authenticatedSession, day, refreshWorkspaceAfterMutation, sessionUnavailableMessage]
   );
 
   const saveBodyMetric = React.useCallback(async () => {
-    if (!session) {
-      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+    if (!authenticatedSession) {
+      setMessage({ type: "error", text: sessionUnavailableMessage });
       return;
     }
 
@@ -1337,7 +1641,7 @@ export default function App(): React.JSX.Element {
     }
 
     const payload = {
-      sessionId: session.sessionId,
+      sessionId: authenticatedSession.sessionId,
       date: bodyMetricDate,
       ...(weightKg !== undefined ? { weightKg } : {}),
       ...(bodyFatPct !== undefined ? { bodyFatPct } : {})
@@ -1366,12 +1670,12 @@ export default function App(): React.JSX.Element {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "체성분 저장 실패" });
     }
     void refreshWorkspaceAfterMutation();
-  }, [bodyFatForm, bodyMetricDate, day, refreshWorkspaceAfterMutation, session, weightForm]);
+  }, [authenticatedSession, bodyFatForm, bodyMetricDate, day, refreshWorkspaceAfterMutation, sessionUnavailableMessage, weightForm]);
 
   const deleteBodyMetric = React.useCallback(
     async (metricId: string) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1384,7 +1688,7 @@ export default function App(): React.JSX.Element {
       try {
         await apiFetch<unknown>(`/api/v1/body-metrics/${metricId}`, {
           method: "DELETE",
-          body: JSON.stringify({ sessionId: session.sessionId })
+          body: JSON.stringify({ sessionId: authenticatedSession.sessionId })
         });
         setMessage({ type: "info", text: "체성분 기록을 삭제했습니다." });
       } catch (error) {
@@ -1393,12 +1697,12 @@ export default function App(): React.JSX.Element {
       }
       void refreshWorkspaceAfterMutation();
     },
-    [day, refreshWorkspaceAfterMutation, session, bodyMetricDate]
+    [authenticatedSession, bodyMetricDate, day, refreshWorkspaceAfterMutation, sessionUnavailableMessage]
   );
 
   const saveGoal = React.useCallback(async () => {
-    if (!session) {
-      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+    if (!authenticatedSession) {
+      setMessage({ type: "error", text: sessionUnavailableMessage });
       return;
     }
 
@@ -1409,7 +1713,7 @@ export default function App(): React.JSX.Element {
     }
 
     const payload = {
-      sessionId: session.sessionId,
+      sessionId: authenticatedSession.sessionId,
       weeklyRoutineTarget: Math.trunc(weeklyRoutineTarget),
       ...(goalWeight.trim() ? { targetWeightKg: parseNumber(goalWeight) } : {}),
       ...(goalFat.trim() ? { targetBodyFat: parseNumber(goalFat) } : {}),
@@ -1428,11 +1732,11 @@ export default function App(): React.JSX.Element {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "목표 저장 실패" });
     }
     void refreshWorkspaceAfterMutation();
-  }, [goalDday, goalFat, goalTarget, goalWeight, refreshWorkspaceAfterMutation, session]);
+  }, [authenticatedSession, goalDday, goalFat, goalTarget, goalWeight, refreshWorkspaceAfterMutation, sessionUnavailableMessage]);
 
   const createMealTemplate = React.useCallback(async () => {
-    if (!session) {
-      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+    if (!authenticatedSession) {
+      setMessage({ type: "error", text: sessionUnavailableMessage });
       return;
     }
     const trimmed = mealTemplateLabel.trim();
@@ -1455,7 +1759,7 @@ export default function App(): React.JSX.Element {
       const saved = await apiFetch<MealTemplate>("/api/v1/templates/meals", {
         method: "POST",
         body: JSON.stringify({
-          sessionId: session.sessionId,
+          sessionId: authenticatedSession.sessionId,
           label: trimmed,
           isActive: true
         })
@@ -1468,12 +1772,12 @@ export default function App(): React.JSX.Element {
       setMealTemplates(previous);
       setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 템플릿 저장 실패" });
     }
-  }, [mealTemplateLabel, mealTemplates, session]);
+  }, [authenticatedSession, mealTemplateLabel, mealTemplates, sessionUnavailableMessage]);
 
   const updateMealTemplate = React.useCallback(
     async (id: string, updates: Partial<Pick<MealTemplate, "label" | "isActive">>) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
       const previous = mealTemplates;
@@ -1486,7 +1790,7 @@ export default function App(): React.JSX.Element {
         const saved = await apiFetch<MealTemplate>(`/api/v1/templates/meals/${id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            sessionId: session.sessionId,
+            sessionId: authenticatedSession.sessionId,
             ...(updates.label !== undefined ? { label: updates.label } : {}),
             ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {})
           })
@@ -1500,7 +1804,7 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: error instanceof Error ? error.message : "식단 템플릿 수정 실패" });
       }
     },
-    [mealTemplates, session]
+    [authenticatedSession, mealTemplates, sessionUnavailableMessage]
   );
 
   const saveMealTemplateEdit = React.useCallback(async () => {
@@ -1528,8 +1832,8 @@ export default function App(): React.JSX.Element {
   }, []);
 
   const createWorkoutTemplate = React.useCallback(async () => {
-    if (!session) {
-      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+    if (!authenticatedSession) {
+      setMessage({ type: "error", text: sessionUnavailableMessage });
       return;
     }
     const trimmed = workoutTemplateLabel.trim();
@@ -1557,7 +1861,7 @@ export default function App(): React.JSX.Element {
       const saved = await apiFetch<WorkoutTemplate>("/api/v1/templates/workouts", {
         method: "POST",
         body: JSON.stringify({
-          sessionId: session.sessionId,
+          sessionId: authenticatedSession.sessionId,
           label: trimmed,
           bodyPart: workoutTemplateBodyPart,
           purpose: workoutTemplatePurpose,
@@ -1574,7 +1878,16 @@ export default function App(): React.JSX.Element {
       setWorkoutTemplates(previous);
       setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 템플릿 저장 실패" });
     }
-  }, [workoutTemplateBodyPart, workoutTemplateDuration, workoutTemplateLabel, workoutTemplatePurpose, workoutTemplateTool, session, workoutTemplates]);
+  }, [
+    authenticatedSession,
+    sessionUnavailableMessage,
+    workoutTemplateBodyPart,
+    workoutTemplateDuration,
+    workoutTemplateLabel,
+    workoutTemplatePurpose,
+    workoutTemplateTool,
+    workoutTemplates
+  ]);
 
   const updateWorkoutTemplate = React.useCallback(
     async (
@@ -1583,8 +1896,8 @@ export default function App(): React.JSX.Element {
         Pick<WorkoutTemplate, "label" | "bodyPart" | "purpose" | "tool" | "defaultDuration" | "isActive">
       >
     ) => {
-      if (!session) {
-        setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+      if (!authenticatedSession) {
+        setMessage({ type: "error", text: sessionUnavailableMessage });
         return;
       }
 
@@ -1599,7 +1912,7 @@ export default function App(): React.JSX.Element {
         const saved = await apiFetch<WorkoutTemplate>(`/api/v1/templates/workouts/${id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            sessionId: session.sessionId,
+            sessionId: authenticatedSession.sessionId,
             ...(updates.label !== undefined ? { label: updates.label } : {}),
             ...(updates.bodyPart !== undefined ? { bodyPart: updates.bodyPart } : {}),
             ...(updates.purpose !== undefined ? { purpose: updates.purpose } : {}),
@@ -1617,7 +1930,7 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: error instanceof Error ? error.message : "운동 템플릿 수정 실패" });
       }
     },
-    [session, workoutTemplates]
+    [authenticatedSession, sessionUnavailableMessage, workoutTemplates]
   );
 
   const saveWorkoutTemplateEdit = React.useCallback(async () => {
@@ -1695,6 +2008,7 @@ export default function App(): React.JSX.Element {
     ({
       title,
       value,
+      recentValue,
       unit,
       min,
       max,
@@ -1703,37 +2017,45 @@ export default function App(): React.JSX.Element {
     }: {
       title: string;
       value: string;
+      recentValue: string;
       unit: "kg" | "%";
       min: number;
       max: number;
       allowEmpty: boolean;
       onSelect: (value: string) => void;
     }) => {
-      const parsed = splitDecimalValue(value, min);
-      const parsedInteger = Number(parsed.integerPart);
-      const integerValue = Number.isFinite(parsedInteger)
-        ? String(Math.max(min, Math.min(max, Math.trunc(parsedInteger))))
-        : String(min);
-      const fractionValue = /^\d$/.test(parsed.fractionPart) ? parsed.fractionPart : "0";
+      const digits = resolveMetricDigits(value || recentValue, min, max);
       setDecimalPicker({
         title,
         unit,
-        integerOptions: buildIntegerRangeOptions(min, max),
-        fractionOptions: decimalFractionOptions,
-        integerValue,
-        fractionValue,
+        min,
+        max,
+        tensValue: digits.tens,
+        onesValue: digits.ones,
+        tenthsValue: digits.tenths,
+        recentValue,
         allowEmpty,
         onSelect
       });
     },
-    [decimalFractionOptions]
+    []
   );
 
   const applyDecimalPickerValue = React.useCallback(() => {
     if (!decimalPicker) {
       return;
     }
-    const nextValue = buildDecimalValue(decimalPicker.integerValue, decimalPicker.fractionValue);
+    const nextValue = formatMetricValue(
+      clampMetricValue(
+        digitsToMetricNumber({
+          tens: decimalPicker.tensValue,
+          ones: decimalPicker.onesValue,
+          tenths: decimalPicker.tenthsValue
+        }),
+        decimalPicker.min,
+        decimalPicker.max
+      )
+    );
     decimalPicker.onSelect(nextValue);
     closeDecimalPicker();
   }, [closeDecimalPicker, decimalPicker]);
@@ -1745,6 +2067,62 @@ export default function App(): React.JSX.Element {
     decimalPicker.onSelect("");
     closeDecimalPicker();
   }, [closeDecimalPicker, decimalPicker]);
+
+  const updateDecimalPickerDigits = React.useCallback(
+    (column: "tensValue" | "onesValue" | "tenthsValue", digit: number) => {
+      setDecimalPicker((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextDigits = {
+          tens: column === "tensValue" ? digit : current.tensValue,
+          ones: column === "onesValue" ? digit : current.onesValue,
+          tenths: column === "tenthsValue" ? digit : current.tenthsValue
+        };
+        if (!isMetricDigitsAllowed(nextDigits, current.min, current.max)) {
+          return current;
+        }
+        return {
+          ...current,
+          ...(column === "tensValue" ? { tensValue: digit } : {}),
+          ...(column === "onesValue" ? { onesValue: digit } : {}),
+          ...(column === "tenthsValue" ? { tenthsValue: digit } : {})
+        };
+      });
+    },
+    []
+  );
+
+  const applyDecimalQuickValue = React.useCallback(
+    (delta: number) => {
+      setDecimalPicker((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextValue = resolveQuickMetricValue(
+          formatMetricValue(
+            digitsToMetricNumber({
+              tens: current.tensValue,
+              ones: current.onesValue,
+              tenths: current.tenthsValue
+            })
+          ),
+          current.recentValue,
+          delta,
+          current.min,
+          current.max
+        );
+        const nextDigits = resolveMetricDigits(nextValue, current.min, current.max);
+        return {
+          ...current,
+          tensValue: nextDigits.tens,
+          onesValue: nextDigits.ones,
+          tenthsValue: nextDigits.tenths
+        };
+      });
+    },
+    []
+  );
 
   const openDdayPicker = React.useCallback(() => {
     const base = goalDday ? new Date(goalDday) : new Date();
@@ -1768,8 +2146,8 @@ export default function App(): React.JSX.Element {
   );
 
   const saveReminder = React.useCallback(async () => {
-    if (!session) {
-      setMessage({ type: "error", text: "먼저 Google 로그인 후 이용해 주세요." });
+    if (!authenticatedSession) {
+      setMessage({ type: "error", text: sessionUnavailableMessage });
       return;
     }
 
@@ -1782,7 +2160,7 @@ export default function App(): React.JSX.Element {
       await apiFetch<{ reminder: ReminderSettings }>("/api/v1/reminders/settings", {
         method: "POST",
         body: JSON.stringify({
-          sessionId: session.sessionId,
+          sessionId: authenticatedSession.sessionId,
           isEnabled: reminder.isEnabled,
           dailyReminderTime: reminder.dailyReminderTime,
           missingLogReminderTime: reminder.missingLogReminderTime,
@@ -1804,7 +2182,7 @@ export default function App(): React.JSX.Element {
     } catch (error) {
       setMessage({ type: "error", text: toUserFacingErrorMessage(error, "리마인더 저장 실패") });
     }
-  }, [reminder, session]);
+  }, [authenticatedSession, reminder, sessionUnavailableMessage]);
 
   const upgradeGoogleMobile = React.useCallback(async () => {
     try {
@@ -1825,21 +2203,21 @@ export default function App(): React.JSX.Element {
         setMessage({ type: "error", text: "Google idToken 획득에 실패했습니다." });
         return;
       }
-      const shouldUpgradeGuest = Boolean(session) && session?.isGuest === true;
+      const currentAuthenticatedSession = authenticatedSession;
+      const shouldUpgradeGuest = currentAuthenticatedSession?.isGuest === true;
       const payload = await apiFetch<Session>(shouldUpgradeGuest ? "/api/v1/auth/upgrade/google" : "/api/v1/auth/google/session", {
         method: "POST",
         body: JSON.stringify({
-          ...(shouldUpgradeGuest ? { sessionId: session.sessionId } : {}),
+          ...(shouldUpgradeGuest ? { sessionId: currentAuthenticatedSession.sessionId } : {}),
           idToken,
           platform: "android",
           mode: "native_sdk"
         })
       });
       setSession(payload);
+      setIsSessionValidated(true);
       await persistSessionId(payload.sessionId);
       setMessage({ type: "success", text: "Google 로그인이 완료되었습니다." });
-      void refreshCoreSessionData(true);
-      void loadTemplateCatalog();
     } catch (error) {
       if (isErrorWithCode(error)) {
         if (error.code === statusCodes.SIGN_IN_CANCELLED) {
@@ -1857,7 +2235,7 @@ export default function App(): React.JSX.Element {
       }
       setMessage({ type: "error", text: toUserFacingErrorMessage(error, "Google 로그인 실패") });
     }
-  }, [loadTemplateCatalog, refreshCoreSessionData, session]);
+  }, [authenticatedSession]);
 
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: statusBarOffset }]}>
@@ -2021,8 +2399,85 @@ export default function App(): React.JSX.Element {
                 미기록 상태입니다. 오늘 기록을 1건이라도 추가하면 경고가 해제됩니다.
               </Text>
             ) : null}
+            <View style={styles.recordSummaryStrip}>
+              <View style={styles.recordSummaryBadge}>
+                <Text style={styles.recordSummaryLabel}>식단</Text>
+                <Text style={styles.recordSummaryValue}>{recordSummary.meals}</Text>
+              </View>
+              <View style={styles.recordSummaryBadge}>
+                <Text style={styles.recordSummaryLabel}>운동</Text>
+                <Text style={styles.recordSummaryValue}>{recordSummary.workouts}</Text>
+              </View>
+              <View style={styles.recordSummaryBadge}>
+                <Text style={styles.recordSummaryLabel}>체성분</Text>
+                <Text style={styles.recordSummaryValue}>{recordSummary.bodyMetrics}</Text>
+              </View>
+            </View>
+            <View style={styles.subCard}>
+              <Text style={styles.sectionSubTitle}>빠른 입력</Text>
+              <Text style={styles.hint}>오늘 상태를 확인하고 체중/체지방을 바로 기록하세요.</Text>
+              <PickerField
+                label="날짜"
+                value={bodyMetricDate}
+                placeholder="YYYY-MM-DD"
+                onPress={() =>
+                  openOptionPicker("체성분 날짜 선택", dateOptions, bodyMetricDate, (value) => {
+                    setBodyMetricDate(value);
+                    closeOptionPicker();
+                  })
+                }
+              />
+              <MetricQuickField
+                label="체중(kg)"
+                value={weightForm}
+                placeholder="65.0 ~ 95.9"
+                recentValue={latestWeightValue}
+                onRecent={() => setWeightForm(resolveQuickMetricValue(weightForm, latestWeightValue, 0, WEIGHT_RANGE.min, WEIGHT_RANGE.max))}
+                onNudge={(delta) => setWeightForm(resolveQuickMetricValue(weightForm, latestWeightValue, delta, WEIGHT_RANGE.min, WEIGHT_RANGE.max))}
+                onPress={() =>
+                  openDecimalPicker({
+                    title: "체중 선택",
+                    value: weightForm,
+                    recentValue: latestWeightValue,
+                    unit: "kg",
+                    min: WEIGHT_RANGE.min,
+                    max: WEIGHT_RANGE.max,
+                    allowEmpty: true,
+                    onSelect: (value) => {
+                      setWeightForm(value);
+                    }
+                  })
+                }
+              />
+              <MetricQuickField
+                label="체지방(%)"
+                value={bodyFatForm}
+                placeholder="5.0 ~ 35.9"
+                recentValue={latestBodyFatValue}
+                onRecent={() => setBodyFatForm(resolveQuickMetricValue(bodyFatForm, latestBodyFatValue, 0, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))}
+                onNudge={(delta) =>
+                  setBodyFatForm(resolveQuickMetricValue(bodyFatForm, latestBodyFatValue, delta, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))
+                }
+                onPress={() =>
+                  openDecimalPicker({
+                    title: "체지방 선택",
+                    value: bodyFatForm,
+                    recentValue: latestBodyFatValue,
+                    unit: "%",
+                    min: BODY_FAT_RANGE.min,
+                    max: BODY_FAT_RANGE.max,
+                    allowEmpty: true,
+                    onSelect: (value) => {
+                      setBodyFatForm(value);
+                    }
+                  })
+                }
+              />
+              <Pressable style={styles.primaryButton} onPress={saveBodyMetric}>
+                <Text style={styles.primaryButtonText}>체성분 저장</Text>
+              </Pressable>
+            </View>
             <Text style={styles.sectionTitle}>식단 체크인</Text>
-            <Text style={styles.hint}>활성 식단 템플릿은 아침/점심/저녁/저녁2 슬롯에 공통으로 표시됩니다.</Text>
 
             {mealSlots.map((slot) => {
               const current = checkinBySlot.get(slot.value);
@@ -2075,7 +2530,6 @@ export default function App(): React.JSX.Element {
             })}
 
             <Text style={styles.sectionTitle}>운동 체크인</Text>
-            <Text style={styles.hint}>오전/오후 슬롯에서 함/안함만 기록합니다. 함 선택은 활성 운동 템플릿이 필요합니다.</Text>
             {workoutSlots.map((slot) => {
               const current = workoutCheckinBySlot.get(slot.value);
               return (
@@ -2124,58 +2578,6 @@ export default function App(): React.JSX.Element {
                 </View>
               );
             })}
-
-            <Text style={styles.sectionTitle}>체중/체지방 기록</Text>
-            <PickerField
-              label="날짜"
-              value={bodyMetricDate}
-              placeholder="YYYY-MM-DD"
-              onPress={() =>
-                openOptionPicker("체성분 날짜 선택", dateOptions, bodyMetricDate, (value) => {
-                  setBodyMetricDate(value);
-                  closeOptionPicker();
-                })
-              }
-            />
-            <PickerField
-              label="체중(kg)"
-              value={weightForm}
-              placeholder="65.0 ~ 95.9"
-              onPress={() =>
-                openDecimalPicker({
-                  title: "체중 선택",
-                  value: weightForm,
-                  unit: "kg",
-                  min: WEIGHT_RANGE.min,
-                  max: WEIGHT_RANGE.max,
-                  allowEmpty: true,
-                  onSelect: (value) => {
-                    setWeightForm(value);
-                  }
-                })
-              }
-            />
-            <PickerField
-              label="체지방(%)"
-              value={bodyFatForm}
-              placeholder="5.0 ~ 35.9"
-              onPress={() =>
-                openDecimalPicker({
-                  title: "체지방 선택",
-                  value: bodyFatForm,
-                  unit: "%",
-                  min: BODY_FAT_RANGE.min,
-                  max: BODY_FAT_RANGE.max,
-                  allowEmpty: true,
-                  onSelect: (value) => {
-                    setBodyFatForm(value);
-                  }
-                })
-              }
-            />
-            <Pressable style={[styles.primaryButton, styles.actionGap]} onPress={saveBodyMetric}>
-              <Text style={styles.primaryButtonText}>체성분 저장</Text>
-            </Pressable>
 
             <Text style={[styles.sectionTitle, styles.actionGap]}>운동 기록 목록</Text>
             <View style={styles.recordList}>
@@ -2248,14 +2650,24 @@ export default function App(): React.JSX.Element {
                 })
               }
             />
-            <PickerField
+            <MetricQuickField
               label="목표 체중"
               value={goalWeight}
               placeholder="목표 체중(kg)"
+              recentValue={latestWeightValue}
+              onRecent={() => {
+                setGoalDraftDirty(true);
+                setGoalWeight(resolveQuickMetricValue(goalWeight, latestWeightValue, 0, WEIGHT_RANGE.min, WEIGHT_RANGE.max));
+              }}
+              onNudge={(delta) => {
+                setGoalDraftDirty(true);
+                setGoalWeight(resolveQuickMetricValue(goalWeight, latestWeightValue, delta, WEIGHT_RANGE.min, WEIGHT_RANGE.max));
+              }}
               onPress={() =>
                 openDecimalPicker({
                   title: "목표 체중 선택",
                   value: goalWeight,
+                  recentValue: latestWeightValue,
                   unit: "kg",
                   min: WEIGHT_RANGE.min,
                   max: WEIGHT_RANGE.max,
@@ -2267,14 +2679,24 @@ export default function App(): React.JSX.Element {
                 })
               }
             />
-            <PickerField
+            <MetricQuickField
               label="목표 체지방"
               value={goalFat}
               placeholder="목표 체지방(%)"
+              recentValue={latestBodyFatValue}
+              onRecent={() => {
+                setGoalDraftDirty(true);
+                setGoalFat(resolveQuickMetricValue(goalFat, latestBodyFatValue, 0, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max));
+              }}
+              onNudge={(delta) => {
+                setGoalDraftDirty(true);
+                setGoalFat(resolveQuickMetricValue(goalFat, latestBodyFatValue, delta, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max));
+              }}
               onPress={() =>
                 openDecimalPicker({
                   title: "목표 체지방 선택",
                   value: goalFat,
+                  recentValue: latestBodyFatValue,
                   unit: "%",
                   min: BODY_FAT_RANGE.min,
                   max: BODY_FAT_RANGE.max,
@@ -2612,61 +3034,146 @@ export default function App(): React.JSX.Element {
             <Text style={styles.pickerTitle}>{decimalPicker?.title ?? ""}</Text>
             <Text style={styles.pickerPreviewText}>
               현재 선택:{" "}
-              {decimalPicker ? `${buildDecimalValue(decimalPicker.integerValue, decimalPicker.fractionValue)}${decimalPicker.unit}` : "-"}
+              {decimalPicker
+                ? `${formatMetricValue(
+                    digitsToMetricNumber({
+                      tens: decimalPicker.tensValue,
+                      ones: decimalPicker.onesValue,
+                      tenths: decimalPicker.tenthsValue
+                    })
+                  )}${decimalPicker.unit}`
+                : "-"}
             </Text>
+            <View style={styles.metricQuickActions}>
+              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(0)}>
+                <Text style={styles.metricQuickActionText}>최근값 {decimalPicker?.recentValue || "-"}</Text>
+              </Pressable>
+              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(-0.1)}>
+                <Text style={styles.metricQuickActionText}>-0.1</Text>
+              </Pressable>
+              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(0.1)}>
+                <Text style={styles.metricQuickActionText}>+0.1</Text>
+              </Pressable>
+            </View>
             <View style={styles.decimalColumnRow}>
               <View style={styles.decimalColumn}>
-                <Text style={styles.decimalColumnLabel}>정수</Text>
+                <Text style={styles.decimalColumnLabel}>십의</Text>
                 <FlatList
-                  data={decimalPicker?.integerOptions ?? []}
-                  keyExtractor={(item) => `int-${item.value}`}
+                  data={wheelDigits}
+                  keyExtractor={(item) => `tens-${item.key}`}
                   style={styles.decimalList}
                   contentContainerStyle={styles.pickerListContent}
-                  initialNumToRender={20}
-                  renderItem={({ item }) => (
-                    <Pressable
-                      style={[styles.pickerOption, decimalPicker?.integerValue === item.value && styles.pickerOptionActive]}
-                      onPress={() =>
-                        setDecimalPicker((current) => (current ? { ...current, integerValue: item.value } : current))
-                      }
-                    >
-                      <Text
+                  initialNumToRender={30}
+                  renderItem={({ item }) => {
+                    const isAllowed = decimalPicker
+                      ? isMetricDigitsAllowed(
+                          { tens: item.digit, ones: decimalPicker.onesValue, tenths: decimalPicker.tenthsValue },
+                          decimalPicker.min,
+                          decimalPicker.max
+                        )
+                      : false;
+                    return (
+                      <Pressable
                         style={[
-                          styles.pickerOptionText,
-                          decimalPicker?.integerValue === item.value && styles.pickerOptionTextActive
+                          styles.pickerOption,
+                          decimalPicker?.tensValue === item.digit && styles.pickerOptionActive,
+                          !isAllowed && styles.pickerOptionDisabled
                         ]}
+                        disabled={!isAllowed}
+                        onPress={() => updateDecimalPickerDigits("tensValue", item.digit)}
                       >
-                        {item.label}
-                      </Text>
-                    </Pressable>
-                  )}
+                        <Text
+                          style={[
+                            styles.pickerOptionText,
+                            decimalPicker?.tensValue === item.digit && styles.pickerOptionTextActive,
+                            !isAllowed && styles.pickerOptionTextDisabled
+                          ]}
+                        >
+                          {item.digit}
+                        </Text>
+                      </Pressable>
+                    );
+                  }}
+                />
+              </View>
+              <View style={styles.decimalColumn}>
+                <Text style={styles.decimalColumnLabel}>일의</Text>
+                <FlatList
+                  data={wheelDigits}
+                  keyExtractor={(item) => `ones-${item.key}`}
+                  style={styles.decimalList}
+                  contentContainerStyle={styles.pickerListContent}
+                  initialNumToRender={30}
+                  renderItem={({ item }) => {
+                    const isAllowed = decimalPicker
+                      ? isMetricDigitsAllowed(
+                          { tens: decimalPicker.tensValue, ones: item.digit, tenths: decimalPicker.tenthsValue },
+                          decimalPicker.min,
+                          decimalPicker.max
+                        )
+                      : false;
+                    return (
+                      <Pressable
+                        style={[
+                          styles.pickerOption,
+                          decimalPicker?.onesValue === item.digit && styles.pickerOptionActive,
+                          !isAllowed && styles.pickerOptionDisabled
+                        ]}
+                        disabled={!isAllowed}
+                        onPress={() => updateDecimalPickerDigits("onesValue", item.digit)}
+                      >
+                        <Text
+                          style={[
+                            styles.pickerOptionText,
+                            decimalPicker?.onesValue === item.digit && styles.pickerOptionTextActive,
+                            !isAllowed && styles.pickerOptionTextDisabled
+                          ]}
+                        >
+                          {item.digit}
+                        </Text>
+                      </Pressable>
+                    );
+                  }}
                 />
               </View>
               <View style={styles.decimalColumn}>
                 <Text style={styles.decimalColumnLabel}>소수</Text>
                 <FlatList
-                  data={decimalPicker?.fractionOptions ?? []}
-                  keyExtractor={(item) => `frac-${item.value}`}
+                  data={wheelDigits}
+                  keyExtractor={(item) => `tenths-${item.key}`}
                   style={styles.decimalList}
                   contentContainerStyle={styles.pickerListContent}
-                  initialNumToRender={10}
-                  renderItem={({ item }) => (
-                    <Pressable
-                      style={[styles.pickerOption, decimalPicker?.fractionValue === item.value && styles.pickerOptionActive]}
-                      onPress={() =>
-                        setDecimalPicker((current) => (current ? { ...current, fractionValue: item.value } : current))
-                      }
-                    >
-                      <Text
+                  initialNumToRender={30}
+                  renderItem={({ item }) => {
+                    const isAllowed = decimalPicker
+                      ? isMetricDigitsAllowed(
+                          { tens: decimalPicker.tensValue, ones: decimalPicker.onesValue, tenths: item.digit },
+                          decimalPicker.min,
+                          decimalPicker.max
+                        )
+                      : false;
+                    return (
+                      <Pressable
                         style={[
-                          styles.pickerOptionText,
-                          decimalPicker?.fractionValue === item.value && styles.pickerOptionTextActive
+                          styles.pickerOption,
+                          decimalPicker?.tenthsValue === item.digit && styles.pickerOptionActive,
+                          !isAllowed && styles.pickerOptionDisabled
                         ]}
+                        disabled={!isAllowed}
+                        onPress={() => updateDecimalPickerDigits("tenthsValue", item.digit)}
                       >
-                        {item.label}
-                      </Text>
-                    </Pressable>
-                  )}
+                        <Text
+                          style={[
+                            styles.pickerOptionText,
+                            decimalPicker?.tenthsValue === item.digit && styles.pickerOptionTextActive,
+                            !isAllowed && styles.pickerOptionTextDisabled
+                          ]}
+                        >
+                          .{item.digit}
+                        </Text>
+                      </Pressable>
+                    );
+                  }}
                 />
               </View>
             </View>
@@ -3115,6 +3622,24 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: "500"
   },
+  metricQuickActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  metricQuickActionButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f7f9fa",
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  metricQuickActionText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: "700"
+  },
   primaryButton: {
     backgroundColor: colors.brand,
     borderRadius: 999,
@@ -3155,6 +3680,32 @@ const styles = StyleSheet.create({
   recordList: {
     gap: spacing.sm,
     marginTop: spacing.xs
+  },
+  recordSummaryStrip: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm
+  },
+  recordSummaryBadge: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2
+  },
+  recordSummaryLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  recordSummaryValue: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: "800"
   },
   recordItem: {
     borderWidth: 1,
@@ -3269,6 +3820,9 @@ const styles = StyleSheet.create({
     borderColor: colors.brand,
     backgroundColor: "#e5f5ef"
   },
+  pickerOptionDisabled: {
+    opacity: 0.35
+  },
   pickerOptionText: {
     fontSize: 14,
     color: colors.textPrimary,
@@ -3276,6 +3830,9 @@ const styles = StyleSheet.create({
   },
   pickerOptionTextActive: {
     color: colors.brand
+  },
+  pickerOptionTextDisabled: {
+    color: colors.textSecondary
   },
   pickerActionRow: {
     flexDirection: "row",

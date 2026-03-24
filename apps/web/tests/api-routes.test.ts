@@ -127,6 +127,44 @@ test("GET /v1/auth/session restores session from cookie and returns null without
   assert.equal(byQueryPayload.data.sessionId, session.sessionId);
 });
 
+test("GET /v1/auth/session does not canonicalize google session during read", async () => {
+  const restoredResponse = await createGoogleSession(
+    new Request("http://localhost/api/v1/auth/google/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idToken: "test:google-sub-fast:user-fast@example.com",
+        platform: "android"
+      })
+    })
+  );
+  assert.equal(restoredResponse.status, 200);
+  const restoredPayload = (await restoredResponse.json()) as {
+    data: { sessionId: string };
+  };
+
+  let called = false;
+  const original = repo.resolveCanonicalGoogleSession;
+  repo.resolveCanonicalGoogleSession = (async () => {
+    called = true;
+    throw new Error("resolveCanonicalGoogleSession should not be called by GET /v1/auth/session");
+  }) as typeof repo.resolveCanonicalGoogleSession;
+
+  try {
+    const response = await getAuthSession(
+      new Request("http://localhost/api/v1/auth/session", {
+        headers: {
+          cookie: `routinemate_session_id=${restoredPayload.data.sessionId}`
+        }
+      })
+    );
+    assert.equal(response.status, 200);
+    assert.equal(called, false);
+  } finally {
+    repo.resolveCanonicalGoogleSession = original;
+  }
+});
+
 test("POST /v1/auth/upgrade/google upgrades session and POST /v1/auth/google/session restores it", async () => {
   const session = await makeSession();
 
@@ -334,7 +372,7 @@ test("POST /v1/auth/google/session rejects native_sdk token when azp mismatches 
   }
 });
 
-test("Google 중복 세션이 canonical userId로 자동 통합되고 /v1/auth/session이 canonical cookie를 재설정한다", async () => {
+test("Google 중복 세션이 canonical userId로 자동 통합되고 이후 /v1/auth/session은 현재 sessionId를 그대로 읽는다", async () => {
   const firstGuest = await makeSession();
   const firstUpgradeResponse = await upgradeGoogleSession(
     new Request("http://localhost/api/v1/auth/upgrade/google", {
@@ -407,10 +445,9 @@ test("Google 중복 세션이 canonical userId로 자동 통합되고 /v1/auth/s
   const stalePayload = (await staleCookieSession.json()) as {
     data: { sessionId: string; userId: string };
   };
-  assert.equal(stalePayload.data.sessionId, firstUpgradePayload.data.sessionId);
+  assert.equal(stalePayload.data.sessionId, secondGuest.sessionId);
   assert.equal(stalePayload.data.userId, firstUpgradePayload.data.userId);
-  const setCookieHeader = staleCookieSession.headers.get("set-cookie");
-  assert.equal(setCookieHeader?.includes(firstUpgradePayload.data.sessionId), true);
+  assert.equal(staleCookieSession.headers.get("set-cookie"), null);
 });
 
 test("GET /v1/dashboard without sessionId returns 400", async () => {
@@ -1193,6 +1230,7 @@ test("GET /v1/bootstrap returns view-scoped payload and supports missing session
       session: { sessionId: string } | null;
       dashboard?: { range: string };
       day?: { date: string };
+      goal?: { weeklyRoutineTarget: number };
       mealTemplates?: Array<{ id: string }>;
       workoutTemplates?: Array<{ id: string }>;
       fetchedAt: string;
@@ -1202,6 +1240,7 @@ test("GET /v1/bootstrap returns view-scoped payload and supports missing session
   assert.equal(recordsPayload.data.session?.sessionId, session.sessionId);
   assert.equal(recordsPayload.data.dashboard?.range, "7d");
   assert.equal(recordsPayload.data.day?.date, "2026-03-01");
+  assert.equal(recordsPayload.data.goal?.weeklyRoutineTarget, 4);
   assert.equal(Array.isArray(recordsPayload.data.mealTemplates), true);
   assert.equal(Array.isArray(recordsPayload.data.workoutTemplates), true);
   assert.equal(typeof recordsPayload.data.fetchedAt, "string");

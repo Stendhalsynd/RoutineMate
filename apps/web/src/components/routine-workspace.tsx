@@ -30,6 +30,7 @@ import {
   defaultMetricChartPadding,
   type MetricPointInput
 } from "@/lib/metric-chart";
+import { adjustMetricInputValue, normalizeMetricInput } from "@/lib/metric-stepper";
 
 type MessageType = "error" | "success" | "info";
 type Message = { type: MessageType; text: string };
@@ -285,14 +286,6 @@ function MetricTrendChart({ title, unit, colorClassName, points }: MetricTrendCh
   );
 }
 
-function buildDecimalOptions(min: number, max: number, step: number): string[] {
-  const options: string[] = [];
-  for (let value = min; value <= max + 0.00001; value += step) {
-    options.push(value.toFixed(1));
-  }
-  return options;
-}
-
 function buildIntegerOptions(min: number, max: number): string[] {
   const options: string[] = [];
   for (let value = min; value <= max; value += 1) {
@@ -347,6 +340,53 @@ function SelectField({
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function DecimalStepperField({
+  label,
+  value,
+  min,
+  max,
+  suffix,
+  allowEmpty = true,
+  onChange
+}: {
+  label: string;
+  value: string;
+  min: number;
+  max: number;
+  suffix: string;
+  allowEmpty?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field decimal-stepper-field">
+      <span>{label}</span>
+      <div className="decimal-stepper-control">
+        <button type="button" className="button stepper-button" onClick={() => onChange(adjustMetricInputValue(value, -0.1, min, max))}>
+          -0.1
+        </button>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={min}
+          max={max}
+          step="0.1"
+          value={value}
+          placeholder={allowEmpty ? `미설정 (${min.toFixed(1)}~${max.toFixed(1)})` : `${min.toFixed(1)} ~ ${max.toFixed(1)}`}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => {
+            const normalized = normalizeMetricInput(event.target.value, min, max);
+            onChange(allowEmpty ? normalized : normalized || min.toFixed(1));
+          }}
+        />
+        <span className="decimal-stepper-suffix">{suffix}</span>
+        <button type="button" className="button stepper-button" onClick={() => onChange(adjustMetricInputValue(value, 0.1, min, max))}>
+          +0.1
+        </button>
+      </div>
     </label>
   );
 }
@@ -628,8 +668,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
   const [isGoogleUpgrading, setIsGoogleUpgrading] = useState(false);
 
   const weeklyTargetOptions = useMemo(() => buildIntegerOptions(1, 21), []);
-  const weightOptions = useMemo(() => buildDecimalOptions(65, 95, 0.1), []);
-  const bodyFatOptions = useMemo(() => buildDecimalOptions(5, 35, 0.1), []);
 
   const sessionQuery = useQuery({
     queryKey: queryKeys.session,
@@ -1768,8 +1806,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
       <section className="compact-header card">
         <div>
           <p className="header-eyebrow">ROUTINEMATE</p>
-          <h1 className="header-title">오늘의 루틴을 빠르게 기록하고 복기하세요.</h1>
-          <p className="header-sub">식단 체크인, 운동, 체성분, 목표를 페이지별로 분리해 관리합니다.</p>
+          <h1 className="header-title">오늘 루틴을 바로 기록하세요.</h1>
           <p className="session-status-text">{sessionStatusText}</p>
         </div>
         <div className="header-actions">
@@ -1906,7 +1943,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <section className="card">
             <h2>식단 체크인</h2>
-            <p className="hint">아침/점심/저녁/저녁2 슬롯에서 함/안함만 기록합니다. 활성 식단 템플릿은 전 슬롯 공통으로 표시됩니다.</p>
 
             {isRecordsLoading ? (
               <p className="hint">선택 날짜의 기록을 불러오는 중입니다.</p>
@@ -1963,7 +1999,6 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
 
           <section className="card">
             <h2>운동 체크인</h2>
-            <p className="hint">오전/오후 슬롯에서 함/안함만 기록합니다. 함 선택은 활성 운동 템플릿이 있을 때만 가능합니다.</p>
             <div className="slot-grid">
               {workoutSlots.map((slot) => {
                 const current = workoutCheckinBySlot.get(slot.value);
@@ -2025,17 +2060,19 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                 value={bodyMetricForm.date}
                 onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, date: value }))}
               />
-              <SelectField
+              <DecimalStepperField
                 label="체중(kg)"
                 value={bodyMetricForm.weightKg}
-                options={weightOptions}
+                min={65}
+                max={95}
                 suffix="kg"
                 onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, weightKg: value }))}
               />
-              <SelectField
+              <DecimalStepperField
                 label="체지방(%)"
                 value={bodyMetricForm.bodyFatPct}
-                options={bodyFatOptions}
+                min={5}
+                max={35}
                 suffix="%"
                 onChange={(value) => setBodyMetricForm((prev) => ({ ...prev, bodyFatPct: value }))}
               />
@@ -2130,17 +2167,19 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
                   value={goalForm.dDay}
                   onChange={(value) => setGoalForm((prev) => ({ ...prev, dDay: value }))}
                 />
-                <SelectField
+                <DecimalStepperField
                   label="목표 체중(kg)"
                   value={goalForm.targetWeightKg}
-                  options={weightOptions}
+                  min={65}
+                  max={95}
                   suffix="kg"
                   onChange={(value) => setGoalForm((prev) => ({ ...prev, targetWeightKg: value }))}
                 />
-                <SelectField
+                <DecimalStepperField
                   label="목표 체지방(%)"
                   value={goalForm.targetBodyFat}
-                  options={bodyFatOptions}
+                  min={5}
+                  max={35}
                   suffix="%"
                   onChange={(value) => setGoalForm((prev) => ({ ...prev, targetBodyFat: value }))}
                 />

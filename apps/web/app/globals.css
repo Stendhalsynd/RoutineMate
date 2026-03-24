@@ -519,6 +519,33 @@ p {
   outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
+.decimal-stepper-field {
+  gap: 8px;
+}
+
+.decimal-stepper-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.decimal-stepper-control input {
+  min-width: 0;
+}
+
+.stepper-button {
+  padding: 8px 10px;
+  min-width: 58px;
+  justify-self: stretch;
+}
+
+.decimal-stepper-suffix {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .slot-grid {
   display: grid;
   gap: 10px;
