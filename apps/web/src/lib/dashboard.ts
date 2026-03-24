@@ -48,8 +48,23 @@ function inWindow(date: string, startMs: number, endMs: number): boolean {
   return keyMs >= startMs && keyMs <= endMs;
 }
 
-function latestMetric(metrics: BodyMetric[]): BodyMetric | undefined {
-  return [...metrics].sort((a, b) => dayMs(toDateKey(b.date)) - dayMs(toDateKey(a.date)))[0];
+function compareMetricRecency(a: BodyMetric, b: BodyMetric): number {
+  const dateCompare = toDateKey(b.date).localeCompare(toDateKey(a.date));
+  if (dateCompare !== 0) {
+    return dateCompare;
+  }
+  const createdCompare = b.createdAt.localeCompare(a.createdAt);
+  if (createdCompare !== 0) {
+    return createdCompare;
+  }
+  return b.id.localeCompare(a.id);
+}
+
+function latestMetricAxisValue(metrics: BodyMetric[], axis: "weightKg" | "bodyFatPct"): number | null {
+  const latest = [...metrics]
+    .filter((item) => item[axis] !== undefined)
+    .sort(compareMetricRecency)[0];
+  return latest?.[axis] ?? null;
 }
 
 function buildBodyMetricTrend(
@@ -256,13 +271,29 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
   });
 
   const allBodyMetrics = input.allBodyMetrics ?? input.bodyMetrics;
-  const latest = latestMetric(allBodyMetrics);
   const rangeDays = rangeToDays(input.range);
   const granularity = rangeToGranularity(input.range);
   const bodyMetricTrend = buildBodyMetricTrend(allBodyMetrics, granularity);
   const buckets = buildBuckets(daily, granularity);
+  const latestWeightKg = latestMetricAxisValue(allBodyMetrics, "weightKg");
+  const latestBodyFatPct = latestMetricAxisValue(allBodyMetrics, "bodyFatPct");
   const goals = input.goals.map((goal) =>
-    calculateGoalProgress(goal, completedWorkouts, latest, rangeDays, endDateKey)
+    calculateGoalProgress(
+      goal,
+      completedWorkouts,
+      latestWeightKg === null && latestBodyFatPct === null
+        ? undefined
+        : {
+            id: "latest-body-metric",
+            userId: input.goals[0]?.userId ?? "latest-user",
+            date: endDateKey,
+            createdAt: now.toISOString(),
+            ...(latestWeightKg !== null ? { weightKg: latestWeightKg } : {}),
+            ...(latestBodyFatPct !== null ? { bodyFatPct: latestBodyFatPct } : {})
+          },
+      rangeDays,
+      endDateKey
+    )
   );
   const daysWithAnyLog = daily.filter(
     (item) => item.mealLogCount > 0 || item.workoutLogCount > 0 || item.hasBodyMetric
@@ -274,8 +305,8 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
     adherenceRate: calculateAdherenceRate(daily),
     totalMeals: meals.length,
     totalWorkouts: completedWorkouts.length,
-    latestWeightKg: latest?.weightKg ?? null,
-    latestBodyFatPct: latest?.bodyFatPct ?? null,
+    latestWeightKg,
+    latestBodyFatPct,
     bodyMetricTrend,
     daily,
     buckets,

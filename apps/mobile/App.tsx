@@ -56,8 +56,10 @@ import {
   getWheelSeedIndices,
   isMetricDigitsAllowed,
   recenterWheelIndex,
+  resolveLatestMetricAxisValue,
   resolveDefaultMetricValue,
   resolveMetricDigits,
+  WHEEL_LOOP_SIZE,
   wrapDigit
 } from "./src/lib/metric-wheel";
 import { isTransientNetworkError, toUserFacingErrorMessage } from "./src/lib/api-error";
@@ -193,6 +195,7 @@ type WorkoutLog = {
 type BodyMetric = {
   id: string;
   date: string;
+  createdAt?: string;
   weightKg?: number;
   bodyFatPct?: number;
   isDeleted?: boolean;
@@ -712,7 +715,7 @@ export default function App(): React.JSX.Element {
   const weeklyTargetOptions = React.useMemo(() => buildIntegerOptions(1, 21, "회"), []);
   const wheelDigits = React.useMemo(
     () =>
-      Array.from({ length: 300 }, (_, index) => ({
+      Array.from({ length: WHEEL_LOOP_SIZE }, (_, index) => ({
         key: String(index),
         index,
         digit: wrapDigit(index)
@@ -734,12 +737,12 @@ export default function App(): React.JSX.Element {
     [dashboard?.bodyMetricTrend]
   );
   const latestWeightValue = React.useMemo(() => {
-    const recentDayValue = day.bodyMetrics.find((item) => !item.isDeleted && item.weightKg !== undefined)?.weightKg;
+    const recentDayValue = resolveLatestMetricAxisValue(day.bodyMetrics, "weightKg");
     const nextValue = recentDayValue ?? dashboard?.latestWeightKg;
     return nextValue !== undefined && nextValue !== null ? formatMetricValue(clampMetricValue(nextValue, WEIGHT_RANGE.min, WEIGHT_RANGE.max)) : "";
   }, [dashboard?.latestWeightKg, day.bodyMetrics]);
   const latestBodyFatValue = React.useMemo(() => {
-    const recentDayValue = day.bodyMetrics.find((item) => !item.isDeleted && item.bodyFatPct !== undefined)?.bodyFatPct;
+    const recentDayValue = resolveLatestMetricAxisValue(day.bodyMetrics, "bodyFatPct");
     const nextValue = recentDayValue ?? dashboard?.latestBodyFatPct;
     return nextValue !== undefined && nextValue !== null
       ? formatMetricValue(clampMetricValue(nextValue, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))
@@ -2145,6 +2148,17 @@ export default function App(): React.JSX.Element {
     [updateDecimalWheel]
   );
 
+  const handleDecimalWheelDragEnd = React.useCallback(
+    (column: WheelColumnKey, event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const velocityY = Math.abs(event.nativeEvent.velocity?.y ?? 0);
+      if (velocityY > 0.05) {
+        return;
+      }
+      handleDecimalWheelScrollEnd(column, event);
+    },
+    [handleDecimalWheelScrollEnd]
+  );
+
   const openDdayPicker = React.useCallback(() => {
     const base = goalDday ? new Date(goalDday) : new Date();
     setDdayPickerDate(Number.isNaN(base.getTime()) ? new Date() : base);
@@ -3059,7 +3073,7 @@ export default function App(): React.JSX.Element {
                     contentContainerStyle={styles.decimalWheelListContent}
                     initialNumToRender={40}
                     onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("tens", event)}
-                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("tens", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelDragEnd("tens", event)}
                     renderItem={({ item }) => {
                       const isAllowed = decimalPicker
                         ? isMetricDigitsAllowed(
@@ -3109,7 +3123,7 @@ export default function App(): React.JSX.Element {
                     contentContainerStyle={styles.decimalWheelListContent}
                     initialNumToRender={40}
                     onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("ones", event)}
-                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("ones", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelDragEnd("ones", event)}
                     renderItem={({ item }) => {
                       const isAllowed = decimalPicker
                         ? isMetricDigitsAllowed(
@@ -3162,7 +3176,7 @@ export default function App(): React.JSX.Element {
                     contentContainerStyle={styles.decimalWheelListContent}
                     initialNumToRender={40}
                     onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("tenths", event)}
-                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("tenths", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelDragEnd("tenths", event)}
                     renderItem={({ item }) => {
                       const isAllowed = decimalPicker
                         ? isMetricDigitsAllowed(
@@ -3640,24 +3654,6 @@ const styles = StyleSheet.create({
   pickerPlaceholder: {
     color: colors.textSecondary,
     fontWeight: "500"
-  },
-  metricQuickActions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8
-  },
-  metricQuickActionButton: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: "#f7f9fa",
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  metricQuickActionText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: "700"
   },
   primaryButton: {
     backgroundColor: colors.brand,

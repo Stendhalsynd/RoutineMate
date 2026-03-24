@@ -11,6 +11,7 @@ import {
   isMetricDigitsAllowed,
   recenterWheelIndex,
   resolveDefaultMetricValue,
+  resolveLatestMetricAxisValue,
   resolveMetricDigits,
   wrapDigit
 } from "../src/lib/metric-wheel";
@@ -74,6 +75,32 @@ test("range validation rejects digit combinations outside min/max boundaries", (
   assert.equal(isMetricDigitsAllowed({ tens: 6, ones: 4, tenths: 9 }, 65, 95), false);
   assert.equal(isMetricDigitsAllowed({ tens: 6, ones: 5, tenths: 0 }, 65, 95), true);
   assert.equal(digitsToMetricNumber({ tens: 9, ones: 5, tenths: 0 }), 95);
+});
+
+test("resolveLatestMetricAxisValue reads latest non-deleted value per axis by date and createdAt", () => {
+  const records = [
+    {
+      id: "old-weight",
+      date: "2026-03-25",
+      createdAt: "2026-03-25T08:00:00.000Z",
+      weightKg: 88.1
+    },
+    {
+      id: "new-fat",
+      date: "2026-03-26",
+      createdAt: "2026-03-26T08:00:00.000Z",
+      bodyFatPct: 17.4
+    },
+    {
+      id: "new-weight",
+      date: "2026-03-25",
+      createdAt: "2026-03-25T09:00:00.000Z",
+      weightKg: 87.8
+    }
+  ];
+
+  assert.equal(resolveLatestMetricAxisValue(records, "weightKg"), 87.8);
+  assert.equal(resolveLatestMetricAxisValue(records, "bodyFatPct"), 17.4);
 });
 
 test("mobile picker source no longer renders legacy quick-action labels", () => {

@@ -473,3 +473,40 @@ test("aggregateDashboard groups body metric trend by month averages for 90d", ()
     { date: "2026-02", weightKg: 79, bodyFatPct: 18.5 }
   ]);
 });
+
+test("aggregateDashboard resolves latest weight and body fat independently across sparse and same-day records", () => {
+  const summary = aggregateDashboard({
+    range: "30d",
+    endDateKey: "2026-03-31",
+    meals: [],
+    workouts: [],
+    bodyMetrics: [],
+    allBodyMetrics: [
+      {
+        id: "weight-earlier",
+        userId: "u1",
+        date: "2026-03-25",
+        weightKg: 88.5,
+        createdAt: "2026-03-25T07:00:00.000Z"
+      },
+      {
+        id: "weight-later",
+        userId: "u1",
+        date: "2026-03-25",
+        weightKg: 88.1,
+        createdAt: "2026-03-25T09:00:00.000Z"
+      },
+      {
+        id: "fat-latest",
+        userId: "u1",
+        date: "2026-03-26",
+        bodyFatPct: 17.9,
+        createdAt: "2026-03-26T08:00:00.000Z"
+      }
+    ],
+    goals: []
+  });
+
+  assert.equal(summary.latestWeightKg, 88.1);
+  assert.equal(summary.latestBodyFatPct, 17.9);
+});

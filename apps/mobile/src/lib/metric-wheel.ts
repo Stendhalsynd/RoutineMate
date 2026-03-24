@@ -4,6 +4,15 @@ export type MetricDigits = {
   tenths: number;
 };
 
+export type MetricRecordLike = {
+  id?: string;
+  date: string;
+  createdAt?: string;
+  isDeleted?: boolean;
+  weightKg?: number;
+  bodyFatPct?: number;
+};
+
 export const WHEEL_LOOP_SIZE = 300;
 export const WHEEL_CENTER_INDEX = 150;
 
@@ -71,13 +80,22 @@ export function isMetricDigitsAllowed(digits: MetricDigits, min: number, max: nu
   return value >= min && value <= max;
 }
 
-export function resolveQuickMetricValue(
-  currentValue: string,
-  recentValue: string,
-  delta: number,
-  min: number,
-  max: number
-): string {
-  const base = parseMetricNumber(currentValue) ?? parseMetricNumber(recentValue) ?? min;
-  return formatMetricValue(clampMetricValue(base + delta, min, max));
+export function resolveLatestMetricAxisValue(
+  records: MetricRecordLike[],
+  axis: "weightKg" | "bodyFatPct"
+): number | null {
+  const latest = [...records]
+    .filter((item) => !item.isDeleted && item[axis] !== undefined)
+    .sort((a, b) => {
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+      const createdCompare = (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+      if (createdCompare !== 0) {
+        return createdCompare;
+      }
+      return (b.id ?? "").localeCompare(a.id ?? "");
+    })[0];
+  return latest?.[axis] ?? null;
 }
