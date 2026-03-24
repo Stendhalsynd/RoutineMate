@@ -52,30 +52,75 @@ function latestMetric(metrics: BodyMetric[]): BodyMetric | undefined {
   return [...metrics].sort((a, b) => dayMs(toDateKey(b.date)) - dayMs(toDateKey(a.date)))[0];
 }
 
-function buildBodyMetricTrend(metrics: BodyMetric[]): BodyMetricTrendPoint[] {
+function buildBodyMetricTrend(
+  metrics: BodyMetric[],
+  granularity: DashboardGranularity
+): BodyMetricTrendPoint[] {
   const sorted = [...metrics].sort((a, b) => {
     const dateCompare = toDateKey(a.date).localeCompare(toDateKey(b.date));
     if (dateCompare !== 0) {
       return dateCompare;
     }
-    const createdCompare = toDateKey(a.createdAt).localeCompare(toDateKey(b.createdAt));
+    const createdCompare = a.createdAt.localeCompare(b.createdAt);
     if (createdCompare !== 0) {
       return createdCompare;
     }
     return a.id.localeCompare(b.id);
   });
 
-  const byDate = new Map<string, BodyMetricTrendPoint>();
-  for (const item of sorted) {
-    const key = toDateKey(item.date);
-    byDate.set(key, {
-      date: key,
-      weightKg: item.weightKg ?? null,
-      bodyFatPct: item.bodyFatPct ?? null
-    });
+  if (granularity === "day") {
+    const byDate = new Map<string, BodyMetricTrendPoint>();
+    for (const item of sorted) {
+      const key = toDateKey(item.date);
+      byDate.set(key, {
+        date: key,
+        weightKg: item.weightKg ?? null,
+        bodyFatPct: item.bodyFatPct ?? null
+      });
+    }
+
+    return Array.from(byDate.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }
 
-  return Array.from(byDate.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const grouped = new Map<
+    string,
+    {
+      key: string;
+      weightSum: number;
+      weightCount: number;
+      bodyFatSum: number;
+      bodyFatCount: number;
+    }
+  >();
+
+  for (const item of sorted) {
+    const dateKey = toDateKey(item.date);
+    const key = granularity === "week" ? isoWeekKey(dateKey) : monthKey(dateKey);
+    const bucket = grouped.get(key) ?? {
+      key,
+      weightSum: 0,
+      weightCount: 0,
+      bodyFatSum: 0,
+      bodyFatCount: 0
+    };
+    if (item.weightKg !== undefined) {
+      bucket.weightSum += item.weightKg;
+      bucket.weightCount += 1;
+    }
+    if (item.bodyFatPct !== undefined) {
+      bucket.bodyFatSum += item.bodyFatPct;
+      bucket.bodyFatCount += 1;
+    }
+    grouped.set(key, bucket);
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map((bucket) => ({
+      date: bucket.key,
+      weightKg: bucket.weightCount > 0 ? Number((bucket.weightSum / bucket.weightCount).toFixed(1)) : null,
+      bodyFatPct: bucket.bodyFatCount > 0 ? Number((bucket.bodyFatSum / bucket.bodyFatCount).toFixed(1)) : null
+    }));
 }
 
 function isoWeekKey(dateKey: string): string {
@@ -212,9 +257,9 @@ export function aggregateDashboard(input: DashboardInput): DashboardSummary {
 
   const allBodyMetrics = input.allBodyMetrics ?? input.bodyMetrics;
   const latest = latestMetric(allBodyMetrics);
-  const bodyMetricTrend = buildBodyMetricTrend(allBodyMetrics);
   const rangeDays = rangeToDays(input.range);
   const granularity = rangeToGranularity(input.range);
+  const bodyMetricTrend = buildBodyMetricTrend(allBodyMetrics, granularity);
   const buckets = buildBuckets(daily, granularity);
   const goals = input.goals.map((goal) =>
     calculateGoalProgress(goal, completedWorkouts, latest, rangeDays, endDateKey)

@@ -375,3 +375,101 @@ test("aggregateDashboard builds full body metric trend and keeps last record per
     { date: "2026-03-04", weightKg: 70.2, bodyFatPct: 19.5 }
   ]);
 });
+
+test("aggregateDashboard groups body metric trend by week averages for 30d", () => {
+  const summary = aggregateDashboard({
+    range: "30d",
+    endDateKey: "2026-03-21",
+    meals: [],
+    workouts: [],
+    bodyMetrics: [],
+    allBodyMetrics: [
+      {
+        id: "w1",
+        userId: "u1",
+        date: "2026-03-02",
+        weightKg: 80,
+        bodyFatPct: 20,
+        createdAt: "2026-03-02T00:00:00.000Z"
+      },
+      {
+        id: "w2",
+        userId: "u1",
+        date: "2026-03-04",
+        weightKg: 82,
+        bodyFatPct: 18,
+        createdAt: "2026-03-04T00:00:00.000Z"
+      },
+      {
+        id: "w3",
+        userId: "u1",
+        date: "2026-03-11",
+        weightKg: 78,
+        createdAt: "2026-03-11T00:00:00.000Z"
+      },
+      {
+        id: "w4",
+        userId: "u1",
+        date: "2026-03-13",
+        bodyFatPct: 16,
+        createdAt: "2026-03-13T00:00:00.000Z"
+      }
+    ],
+    goals: []
+  });
+
+  assert.equal(summary.granularity, "week");
+  assert.deepEqual(summary.bodyMetricTrend, [
+    { date: "2026-W10", weightKg: 81, bodyFatPct: 19 },
+    { date: "2026-W11", weightKg: 78, bodyFatPct: 16 }
+  ]);
+});
+
+test("aggregateDashboard groups body metric trend by month averages for 90d", () => {
+  const summary = aggregateDashboard({
+    range: "90d",
+    endDateKey: "2026-03-31",
+    meals: [],
+    workouts: [],
+    bodyMetrics: [],
+    allBodyMetrics: [
+      {
+        id: "m1",
+        userId: "u1",
+        date: "2026-01-05",
+        weightKg: 82,
+        bodyFatPct: 22,
+        createdAt: "2026-01-05T00:00:00.000Z"
+      },
+      {
+        id: "m2",
+        userId: "u1",
+        date: "2026-01-20",
+        weightKg: 80,
+        createdAt: "2026-01-20T00:00:00.000Z"
+      },
+      {
+        id: "m3",
+        userId: "u1",
+        date: "2026-02-03",
+        bodyFatPct: 19,
+        createdAt: "2026-02-03T00:00:00.000Z"
+      },
+      {
+        id: "m4",
+        userId: "u1",
+        date: "2026-02-10",
+        weightKg: 79,
+        bodyFatPct: 18,
+        createdAt: "2026-02-10T00:00:00.000Z"
+      }
+    ],
+    goals: []
+  });
+
+  assert.equal(summary.granularity, "month");
+  assert.deepEqual(summary.bodyMetricTrend, [
+    { date: "2026-01", weightKg: 81, bodyFatPct: 22 },
+    { date: "2026-02", weightKg: 79, bodyFatPct: 18.5 }
+  ]);
+});

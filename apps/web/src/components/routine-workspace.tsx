@@ -182,6 +182,16 @@ function formatBucketLabel(bucket: DashboardBucket, granularity: DashboardSummar
   return `${bucket.label} (${bucket.from.slice(5)}~${bucket.to.slice(5)})`;
 }
 
+function formatTrendGranularityLabel(granularity?: DashboardSummary["granularity"]): string {
+  if (granularity === "week") {
+    return "Week";
+  }
+  if (granularity === "month") {
+    return "Month";
+  }
+  return "Day";
+}
+
 function formatDday(daysToDday?: number): string {
   if (daysToDday === undefined) {
     return "미설정";
@@ -1896,7 +1906,7 @@ export function RoutineWorkspace({ view }: { view: WorkspaceView }) {
           </div>
 
           <div className="metric-trend-panel">
-            <h3>체성분 추세 (전체 기록)</h3>
+            <h3>체성분 추세 ({formatTrendGranularityLabel(dashboard?.granularity)} 기준)</h3>
             <div className="metric-trend-grid">
               <MetricTrendChart title="체중" unit="kg" colorClassName="metric-line-weight" points={weightTrendPoints} />
               <MetricTrendChart

@@ -23,7 +23,9 @@ import {
   StatusBar as RNStatusBar,
   View,
   type KeyboardTypeOptions,
-  type LayoutChangeEvent
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent
 } from "react-native";
 import * as React from "react";
 import { cardRadius, colors, spacing } from "@routinemate/ui";
@@ -50,9 +52,12 @@ import {
   clampMetricValue,
   digitsToMetricNumber,
   formatMetricValue,
+  getWheelLoopIndex,
+  getWheelSeedIndices,
   isMetricDigitsAllowed,
+  recenterWheelIndex,
+  resolveDefaultMetricValue,
   resolveMetricDigits,
-  resolveQuickMetricValue,
   wrapDigit
 } from "./src/lib/metric-wheel";
 import { isTransientNetworkError, toUserFacingErrorMessage } from "./src/lib/api-error";
@@ -223,6 +228,15 @@ const MOBILE_MENU_WIDTH = 292;
 const MOBILE_MENU_EDGE_SWIPE = 24;
 const WEIGHT_RANGE = { min: 65, max: 95 };
 const BODY_FAT_RANGE = { min: 5, max: 35 };
+const DECIMAL_WHEEL_ITEM_HEIGHT = 44;
+const DECIMAL_WHEEL_VISIBLE_ROWS = 5;
+
+type WheelColumnKey = "tens" | "ones" | "tenths";
+type WheelItem = {
+  key: string;
+  index: number;
+  digit: number;
+};
 
 const mealSlots: Array<{ value: MealSlot; label: string }> = [
   { value: "breakfast", label: "아침" },
@@ -365,6 +379,16 @@ function formatBucketLabel(
   return `${bucket.label} (${bucket.from.slice(5)}~${bucket.to.slice(5)})`;
 }
 
+function formatTrendGranularityLabel(granularity?: Dashboard["granularity"]): string {
+  if (granularity === "week") {
+    return "Week";
+  }
+  if (granularity === "month") {
+    return "Month";
+  }
+  return "Day";
+}
+
 type PickerOption = {
   value: string;
   label: string;
@@ -385,7 +409,9 @@ type DecimalPickerState = {
   tensValue: number;
   onesValue: number;
   tenthsValue: number;
-  recentValue: string;
+  tensIndex: number;
+  onesIndex: number;
+  tenthsIndex: number;
   allowEmpty: boolean;
   onSelect: (value: string) => void;
 };
@@ -549,22 +575,16 @@ function PickerField({
   );
 }
 
-function MetricQuickField({
+function MetricPickerField({
   label,
   value,
   placeholder,
-  recentValue,
-  onPress,
-  onRecent,
-  onNudge
+  onPress
 }: {
   label: string;
   value: string;
   placeholder: string;
-  recentValue: string;
   onPress: () => void;
-  onRecent: () => void;
-  onNudge: (delta: number) => void;
 }) {
   return (
     <View style={styles.field}>
@@ -572,20 +592,6 @@ function MetricQuickField({
       <Pressable style={styles.pickerInput} onPress={onPress}>
         <Text style={[styles.pickerInputText, value ? null : styles.pickerPlaceholder]}>{value || placeholder}</Text>
       </Pressable>
-      <View style={styles.metricQuickActions}>
-        <Pressable style={styles.metricQuickActionButton} onPress={onRecent}>
-          <Text style={styles.metricQuickActionText}>최근값 {recentValue || "-"}</Text>
-        </Pressable>
-        <Pressable style={styles.metricQuickActionButton} onPress={() => onNudge(-0.1)}>
-          <Text style={styles.metricQuickActionText}>-0.1</Text>
-        </Pressable>
-        <Pressable style={styles.metricQuickActionButton} onPress={() => onNudge(0.1)}>
-          <Text style={styles.metricQuickActionText}>+0.1</Text>
-        </Pressable>
-        <Pressable style={styles.metricQuickActionButton} onPress={onPress}>
-          <Text style={styles.metricQuickActionText}>정밀 선택</Text>
-        </Pressable>
-      </View>
     </View>
   );
 }
@@ -687,6 +693,9 @@ export default function App(): React.JSX.Element {
   const [decimalPicker, setDecimalPicker] = React.useState<DecimalPickerState | null>(null);
   const [isDdayPickerVisible, setDdayPickerVisible] = React.useState(false);
   const [ddayPickerDate, setDdayPickerDate] = React.useState<Date>(new Date());
+  const tensWheelRef = React.useRef<FlatList<WheelItem> | null>(null);
+  const onesWheelRef = React.useRef<FlatList<WheelItem> | null>(null);
+  const tenthsWheelRef = React.useRef<FlatList<WheelItem> | null>(null);
   const menuTranslateX = React.useRef(new Animated.Value(-MOBILE_MENU_WIDTH)).current;
   const menuScrimOpacity = React.useMemo(
     () =>
@@ -703,8 +712,9 @@ export default function App(): React.JSX.Element {
   const weeklyTargetOptions = React.useMemo(() => buildIntegerOptions(1, 21, "회"), []);
   const wheelDigits = React.useMemo(
     () =>
-      Array.from({ length: 30 }, (_, index) => ({
+      Array.from({ length: 300 }, (_, index) => ({
         key: String(index),
+        index,
         digit: wrapDigit(index)
       })),
     []
@@ -2004,6 +2014,13 @@ export default function App(): React.JSX.Element {
     setDecimalPicker(null);
   }, []);
 
+  const scrollWheelToIndex = React.useCallback((column: WheelColumnKey, index: number, animated: boolean) => {
+    const nextOffset = index * DECIMAL_WHEEL_ITEM_HEIGHT;
+    const ref =
+      column === "tens" ? tensWheelRef.current : column === "ones" ? onesWheelRef.current : tenthsWheelRef.current;
+    ref?.scrollToOffset({ offset: nextOffset, animated });
+  }, []);
+
   const openDecimalPicker = React.useCallback(
     ({
       title,
@@ -2024,7 +2041,8 @@ export default function App(): React.JSX.Element {
       allowEmpty: boolean;
       onSelect: (value: string) => void;
     }) => {
-      const digits = resolveMetricDigits(value || recentValue, min, max);
+      const digits = resolveMetricDigits(resolveDefaultMetricValue(value, recentValue, min, max), min, max);
+      const seedIndices = getWheelSeedIndices(digits);
       setDecimalPicker({
         title,
         unit,
@@ -2033,13 +2051,27 @@ export default function App(): React.JSX.Element {
         tensValue: digits.tens,
         onesValue: digits.ones,
         tenthsValue: digits.tenths,
-        recentValue,
+        tensIndex: seedIndices.tens,
+        onesIndex: seedIndices.ones,
+        tenthsIndex: seedIndices.tenths,
         allowEmpty,
         onSelect
       });
     },
     []
   );
+
+  React.useEffect(() => {
+    if (!decimalPicker) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      scrollWheelToIndex("tens", decimalPicker.tensIndex, false);
+      scrollWheelToIndex("ones", decimalPicker.onesIndex, false);
+      scrollWheelToIndex("tenths", decimalPicker.tenthsIndex, false);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [decimalPicker, scrollWheelToIndex]);
 
   const applyDecimalPickerValue = React.useCallback(() => {
     if (!decimalPicker) {
@@ -2068,60 +2100,49 @@ export default function App(): React.JSX.Element {
     closeDecimalPicker();
   }, [closeDecimalPicker, decimalPicker]);
 
-  const updateDecimalPickerDigits = React.useCallback(
-    (column: "tensValue" | "onesValue" | "tenthsValue", digit: number) => {
+  const updateDecimalWheel = React.useCallback(
+    (column: WheelColumnKey, rawIndex: number) => {
       setDecimalPicker((current) => {
         if (!current) {
           return current;
         }
+        const digit = getWheelLoopIndex(rawIndex);
+        const centeredIndex = recenterWheelIndex(rawIndex);
         const nextDigits = {
-          tens: column === "tensValue" ? digit : current.tensValue,
-          ones: column === "onesValue" ? digit : current.onesValue,
-          tenths: column === "tenthsValue" ? digit : current.tenthsValue
+          tens: column === "tens" ? digit : current.tensValue,
+          ones: column === "ones" ? digit : current.onesValue,
+          tenths: column === "tenths" ? digit : current.tenthsValue
         };
         if (!isMetricDigitsAllowed(nextDigits, current.min, current.max)) {
+          requestAnimationFrame(() => {
+            scrollWheelToIndex(
+              column,
+              column === "tens" ? current.tensIndex : column === "ones" ? current.onesIndex : current.tenthsIndex,
+              true
+            );
+          });
           return current;
         }
+        requestAnimationFrame(() => {
+          scrollWheelToIndex(column, centeredIndex, false);
+        });
         return {
           ...current,
-          ...(column === "tensValue" ? { tensValue: digit } : {}),
-          ...(column === "onesValue" ? { onesValue: digit } : {}),
-          ...(column === "tenthsValue" ? { tenthsValue: digit } : {})
+          ...(column === "tens" ? { tensValue: digit, tensIndex: centeredIndex } : {}),
+          ...(column === "ones" ? { onesValue: digit, onesIndex: centeredIndex } : {}),
+          ...(column === "tenths" ? { tenthsValue: digit, tenthsIndex: centeredIndex } : {})
         };
       });
     },
-    []
+    [scrollWheelToIndex]
   );
 
-  const applyDecimalQuickValue = React.useCallback(
-    (delta: number) => {
-      setDecimalPicker((current) => {
-        if (!current) {
-          return current;
-        }
-        const nextValue = resolveQuickMetricValue(
-          formatMetricValue(
-            digitsToMetricNumber({
-              tens: current.tensValue,
-              ones: current.onesValue,
-              tenths: current.tenthsValue
-            })
-          ),
-          current.recentValue,
-          delta,
-          current.min,
-          current.max
-        );
-        const nextDigits = resolveMetricDigits(nextValue, current.min, current.max);
-        return {
-          ...current,
-          tensValue: nextDigits.tens,
-          onesValue: nextDigits.ones,
-          tenthsValue: nextDigits.tenths
-        };
-      });
+  const handleDecimalWheelScrollEnd = React.useCallback(
+    (column: WheelColumnKey, event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const rawIndex = Math.round(event.nativeEvent.contentOffset.y / DECIMAL_WHEEL_ITEM_HEIGHT);
+      updateDecimalWheel(column, rawIndex);
     },
-    []
+    [updateDecimalWheel]
   );
 
   const openDdayPicker = React.useCallback(() => {
@@ -2363,7 +2384,7 @@ export default function App(): React.JSX.Element {
               )}
             </View>
             <View style={styles.metricPanel}>
-              <Text style={styles.sectionSubTitle}>체성분 추세 (전체 기록)</Text>
+              <Text style={styles.sectionSubTitle}>체성분 추세 ({formatTrendGranularityLabel(dashboard?.granularity)} 기준)</Text>
               <MetricLineChart title="체중" unit="kg" color="#1f7a65" points={weightTrendPoints} />
               <MetricLineChart title="체지방" unit="%" color="#4f79d8" points={bodyFatTrendPoints} />
             </View>
@@ -2427,13 +2448,10 @@ export default function App(): React.JSX.Element {
                   })
                 }
               />
-              <MetricQuickField
+              <MetricPickerField
                 label="체중(kg)"
                 value={weightForm}
                 placeholder="65.0 ~ 95.9"
-                recentValue={latestWeightValue}
-                onRecent={() => setWeightForm(resolveQuickMetricValue(weightForm, latestWeightValue, 0, WEIGHT_RANGE.min, WEIGHT_RANGE.max))}
-                onNudge={(delta) => setWeightForm(resolveQuickMetricValue(weightForm, latestWeightValue, delta, WEIGHT_RANGE.min, WEIGHT_RANGE.max))}
                 onPress={() =>
                   openDecimalPicker({
                     title: "체중 선택",
@@ -2449,15 +2467,10 @@ export default function App(): React.JSX.Element {
                   })
                 }
               />
-              <MetricQuickField
+              <MetricPickerField
                 label="체지방(%)"
                 value={bodyFatForm}
                 placeholder="5.0 ~ 35.9"
-                recentValue={latestBodyFatValue}
-                onRecent={() => setBodyFatForm(resolveQuickMetricValue(bodyFatForm, latestBodyFatValue, 0, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))}
-                onNudge={(delta) =>
-                  setBodyFatForm(resolveQuickMetricValue(bodyFatForm, latestBodyFatValue, delta, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max))
-                }
                 onPress={() =>
                   openDecimalPicker({
                     title: "체지방 선택",
@@ -2650,19 +2663,10 @@ export default function App(): React.JSX.Element {
                 })
               }
             />
-            <MetricQuickField
+            <MetricPickerField
               label="목표 체중"
               value={goalWeight}
               placeholder="목표 체중(kg)"
-              recentValue={latestWeightValue}
-              onRecent={() => {
-                setGoalDraftDirty(true);
-                setGoalWeight(resolveQuickMetricValue(goalWeight, latestWeightValue, 0, WEIGHT_RANGE.min, WEIGHT_RANGE.max));
-              }}
-              onNudge={(delta) => {
-                setGoalDraftDirty(true);
-                setGoalWeight(resolveQuickMetricValue(goalWeight, latestWeightValue, delta, WEIGHT_RANGE.min, WEIGHT_RANGE.max));
-              }}
               onPress={() =>
                 openDecimalPicker({
                   title: "목표 체중 선택",
@@ -2679,19 +2683,10 @@ export default function App(): React.JSX.Element {
                 })
               }
             />
-            <MetricQuickField
+            <MetricPickerField
               label="목표 체지방"
               value={goalFat}
               placeholder="목표 체지방(%)"
-              recentValue={latestBodyFatValue}
-              onRecent={() => {
-                setGoalDraftDirty(true);
-                setGoalFat(resolveQuickMetricValue(goalFat, latestBodyFatValue, 0, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max));
-              }}
-              onNudge={(delta) => {
-                setGoalDraftDirty(true);
-                setGoalFat(resolveQuickMetricValue(goalFat, latestBodyFatValue, delta, BODY_FAT_RANGE.min, BODY_FAT_RANGE.max));
-              }}
               onPress={() =>
                 openDecimalPicker({
                   title: "목표 체지방 선택",
@@ -3032,8 +3027,7 @@ export default function App(): React.JSX.Element {
           <Pressable style={styles.pickerBackdropDismiss} onPress={closeDecimalPicker} />
           <View style={styles.pickerSheet}>
             <Text style={styles.pickerTitle}>{decimalPicker?.title ?? ""}</Text>
-            <Text style={styles.pickerPreviewText}>
-              현재 선택:{" "}
+            <Text style={styles.decimalPreviewValue}>
               {decimalPicker
                 ? `${formatMetricValue(
                     digitsToMetricNumber({
@@ -3042,139 +3036,164 @@ export default function App(): React.JSX.Element {
                       tenths: decimalPicker.tenthsValue
                     })
                   )}${decimalPicker.unit}`
-                : "-"}
+                : "00.0"}
             </Text>
-            <View style={styles.metricQuickActions}>
-              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(0)}>
-                <Text style={styles.metricQuickActionText}>최근값 {decimalPicker?.recentValue || "-"}</Text>
-              </Pressable>
-              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(-0.1)}>
-                <Text style={styles.metricQuickActionText}>-0.1</Text>
-              </Pressable>
-              <Pressable style={styles.metricQuickActionButton} onPress={() => applyDecimalQuickValue(0.1)}>
-                <Text style={styles.metricQuickActionText}>+0.1</Text>
-              </Pressable>
-            </View>
-            <View style={styles.decimalColumnRow}>
-              <View style={styles.decimalColumn}>
-                <Text style={styles.decimalColumnLabel}>십의</Text>
-                <FlatList
-                  data={wheelDigits}
-                  keyExtractor={(item) => `tens-${item.key}`}
-                  style={styles.decimalList}
-                  contentContainerStyle={styles.pickerListContent}
-                  initialNumToRender={30}
-                  renderItem={({ item }) => {
-                    const isAllowed = decimalPicker
-                      ? isMetricDigitsAllowed(
-                          { tens: item.digit, ones: decimalPicker.onesValue, tenths: decimalPicker.tenthsValue },
-                          decimalPicker.min,
-                          decimalPicker.max
-                        )
-                      : false;
-                    return (
-                      <Pressable
-                        style={[
-                          styles.pickerOption,
-                          decimalPicker?.tensValue === item.digit && styles.pickerOptionActive,
-                          !isAllowed && styles.pickerOptionDisabled
-                        ]}
-                        disabled={!isAllowed}
-                        onPress={() => updateDecimalPickerDigits("tensValue", item.digit)}
-                      >
-                        <Text
-                          style={[
-                            styles.pickerOptionText,
-                            decimalPicker?.tensValue === item.digit && styles.pickerOptionTextActive,
-                            !isAllowed && styles.pickerOptionTextDisabled
-                          ]}
+            <View style={styles.decimalWheelFrame}>
+              <View style={styles.decimalWheelHighlight} />
+              <View style={styles.decimalColumnRow}>
+                <View style={styles.decimalWheelColumn}>
+                  <FlatList
+                    ref={tensWheelRef}
+                    data={wheelDigits}
+                    keyExtractor={(item) => `tens-${item.key}`}
+                    style={styles.decimalWheelList}
+                    showsVerticalScrollIndicator={false}
+                    snapToInterval={DECIMAL_WHEEL_ITEM_HEIGHT}
+                    decelerationRate="fast"
+                    bounces={false}
+                    getItemLayout={(_, index) => ({
+                      length: DECIMAL_WHEEL_ITEM_HEIGHT,
+                      offset: DECIMAL_WHEEL_ITEM_HEIGHT * index,
+                      index
+                    })}
+                    contentContainerStyle={styles.decimalWheelListContent}
+                    initialNumToRender={40}
+                    onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("tens", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("tens", event)}
+                    renderItem={({ item }) => {
+                      const isAllowed = decimalPicker
+                        ? isMetricDigitsAllowed(
+                            { tens: item.digit, ones: decimalPicker.onesValue, tenths: decimalPicker.tenthsValue },
+                            decimalPicker.min,
+                            decimalPicker.max
+                          )
+                        : false;
+                      const distance = Math.min(Math.abs(item.index - (decimalPicker?.tensIndex ?? 0)), 3);
+                      return (
+                        <Pressable
+                          style={styles.decimalWheelItem}
+                          disabled={!isAllowed}
+                          onPress={() => updateDecimalWheel("tens", item.index)}
                         >
-                          {item.digit}
-                        </Text>
-                      </Pressable>
-                    );
-                  }}
-                />
-              </View>
-              <View style={styles.decimalColumn}>
-                <Text style={styles.decimalColumnLabel}>일의</Text>
-                <FlatList
-                  data={wheelDigits}
-                  keyExtractor={(item) => `ones-${item.key}`}
-                  style={styles.decimalList}
-                  contentContainerStyle={styles.pickerListContent}
-                  initialNumToRender={30}
-                  renderItem={({ item }) => {
-                    const isAllowed = decimalPicker
-                      ? isMetricDigitsAllowed(
-                          { tens: decimalPicker.tensValue, ones: item.digit, tenths: decimalPicker.tenthsValue },
-                          decimalPicker.min,
-                          decimalPicker.max
-                        )
-                      : false;
-                    return (
-                      <Pressable
-                        style={[
-                          styles.pickerOption,
-                          decimalPicker?.onesValue === item.digit && styles.pickerOptionActive,
-                          !isAllowed && styles.pickerOptionDisabled
-                        ]}
-                        disabled={!isAllowed}
-                        onPress={() => updateDecimalPickerDigits("onesValue", item.digit)}
-                      >
-                        <Text
-                          style={[
-                            styles.pickerOptionText,
-                            decimalPicker?.onesValue === item.digit && styles.pickerOptionTextActive,
-                            !isAllowed && styles.pickerOptionTextDisabled
-                          ]}
+                          <Text
+                            style={[
+                              styles.decimalWheelDigit,
+                              distance === 0 && styles.decimalWheelDigitActive,
+                              distance === 1 && styles.decimalWheelDigitNear,
+                              distance >= 2 && styles.decimalWheelDigitFar,
+                              !isAllowed && styles.pickerOptionTextDisabled
+                            ]}
+                          >
+                            {item.digit}
+                          </Text>
+                        </Pressable>
+                      );
+                    }}
+                  />
+                </View>
+                <View style={styles.decimalWheelColumn}>
+                  <FlatList
+                    ref={onesWheelRef}
+                    data={wheelDigits}
+                    keyExtractor={(item) => `ones-${item.key}`}
+                    style={styles.decimalWheelList}
+                    showsVerticalScrollIndicator={false}
+                    snapToInterval={DECIMAL_WHEEL_ITEM_HEIGHT}
+                    decelerationRate="fast"
+                    bounces={false}
+                    getItemLayout={(_, index) => ({
+                      length: DECIMAL_WHEEL_ITEM_HEIGHT,
+                      offset: DECIMAL_WHEEL_ITEM_HEIGHT * index,
+                      index
+                    })}
+                    contentContainerStyle={styles.decimalWheelListContent}
+                    initialNumToRender={40}
+                    onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("ones", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("ones", event)}
+                    renderItem={({ item }) => {
+                      const isAllowed = decimalPicker
+                        ? isMetricDigitsAllowed(
+                            { tens: decimalPicker.tensValue, ones: item.digit, tenths: decimalPicker.tenthsValue },
+                            decimalPicker.min,
+                            decimalPicker.max
+                          )
+                        : false;
+                      const distance = Math.min(Math.abs(item.index - (decimalPicker?.onesIndex ?? 0)), 3);
+                      return (
+                        <Pressable
+                          style={styles.decimalWheelItem}
+                          disabled={!isAllowed}
+                          onPress={() => updateDecimalWheel("ones", item.index)}
                         >
-                          {item.digit}
-                        </Text>
-                      </Pressable>
-                    );
-                  }}
-                />
-              </View>
-              <View style={styles.decimalColumn}>
-                <Text style={styles.decimalColumnLabel}>소수</Text>
-                <FlatList
-                  data={wheelDigits}
-                  keyExtractor={(item) => `tenths-${item.key}`}
-                  style={styles.decimalList}
-                  contentContainerStyle={styles.pickerListContent}
-                  initialNumToRender={30}
-                  renderItem={({ item }) => {
-                    const isAllowed = decimalPicker
-                      ? isMetricDigitsAllowed(
-                          { tens: decimalPicker.tensValue, ones: decimalPicker.onesValue, tenths: item.digit },
-                          decimalPicker.min,
-                          decimalPicker.max
-                        )
-                      : false;
-                    return (
-                      <Pressable
-                        style={[
-                          styles.pickerOption,
-                          decimalPicker?.tenthsValue === item.digit && styles.pickerOptionActive,
-                          !isAllowed && styles.pickerOptionDisabled
-                        ]}
-                        disabled={!isAllowed}
-                        onPress={() => updateDecimalPickerDigits("tenthsValue", item.digit)}
-                      >
-                        <Text
-                          style={[
-                            styles.pickerOptionText,
-                            decimalPicker?.tenthsValue === item.digit && styles.pickerOptionTextActive,
-                            !isAllowed && styles.pickerOptionTextDisabled
-                          ]}
+                          <Text
+                            style={[
+                              styles.decimalWheelDigit,
+                              distance === 0 && styles.decimalWheelDigitActive,
+                              distance === 1 && styles.decimalWheelDigitNear,
+                              distance >= 2 && styles.decimalWheelDigitFar,
+                              !isAllowed && styles.pickerOptionTextDisabled
+                            ]}
+                          >
+                            {item.digit}
+                          </Text>
+                        </Pressable>
+                      );
+                    }}
+                  />
+                </View>
+                <View style={styles.decimalWheelDotWrap}>
+                  <Text style={styles.decimalWheelDot}>.</Text>
+                </View>
+                <View style={styles.decimalWheelColumn}>
+                  <FlatList
+                    ref={tenthsWheelRef}
+                    data={wheelDigits}
+                    keyExtractor={(item) => `tenths-${item.key}`}
+                    style={styles.decimalWheelList}
+                    showsVerticalScrollIndicator={false}
+                    snapToInterval={DECIMAL_WHEEL_ITEM_HEIGHT}
+                    decelerationRate="fast"
+                    bounces={false}
+                    getItemLayout={(_, index) => ({
+                      length: DECIMAL_WHEEL_ITEM_HEIGHT,
+                      offset: DECIMAL_WHEEL_ITEM_HEIGHT * index,
+                      index
+                    })}
+                    contentContainerStyle={styles.decimalWheelListContent}
+                    initialNumToRender={40}
+                    onMomentumScrollEnd={(event) => handleDecimalWheelScrollEnd("tenths", event)}
+                    onScrollEndDrag={(event) => handleDecimalWheelScrollEnd("tenths", event)}
+                    renderItem={({ item }) => {
+                      const isAllowed = decimalPicker
+                        ? isMetricDigitsAllowed(
+                            { tens: decimalPicker.tensValue, ones: decimalPicker.onesValue, tenths: item.digit },
+                            decimalPicker.min,
+                            decimalPicker.max
+                          )
+                        : false;
+                      const distance = Math.min(Math.abs(item.index - (decimalPicker?.tenthsIndex ?? 0)), 3);
+                      return (
+                        <Pressable
+                          style={styles.decimalWheelItem}
+                          disabled={!isAllowed}
+                          onPress={() => updateDecimalWheel("tenths", item.index)}
                         >
-                          .{item.digit}
-                        </Text>
-                      </Pressable>
-                    );
-                  }}
-                />
+                          <Text
+                            style={[
+                              styles.decimalWheelDigit,
+                              distance === 0 && styles.decimalWheelDigitActive,
+                              distance === 1 && styles.decimalWheelDigitNear,
+                              distance >= 2 && styles.decimalWheelDigitFar,
+                              !isAllowed && styles.pickerOptionTextDisabled
+                            ]}
+                          >
+                            {item.digit}
+                          </Text>
+                        </Pressable>
+                      );
+                    }}
+                  />
+                </View>
               </View>
             </View>
             <View style={styles.pickerActionRow}>
@@ -3781,25 +3800,84 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textPrimary
   },
-  pickerPreviewText: {
-    color: colors.textSecondary,
-    fontSize: 13
+  decimalPreviewValue: {
+    color: colors.textPrimary,
+    fontSize: 28,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: 1.2
+  },
+  decimalWheelFrame: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f6f8fa",
+    overflow: "hidden",
+    position: "relative"
+  },
+  decimalWheelHighlight: {
+    position: "absolute",
+    left: spacing.sm,
+    right: spacing.sm,
+    top: DECIMAL_WHEEL_ITEM_HEIGHT * 2 + 4,
+    height: DECIMAL_WHEEL_ITEM_HEIGHT,
+    borderRadius: 14,
+    backgroundColor: "#e5f5ef",
+    borderWidth: 1,
+    borderColor: "#b8dccc",
+    zIndex: 1
   },
   decimalColumnRow: {
     flexDirection: "row",
-    gap: spacing.sm
+    gap: spacing.xs,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.sm
   },
-  decimalColumn: {
-    flex: 1,
-    gap: 6
+  decimalWheelColumn: {
+    width: 64
   },
-  decimalColumnLabel: {
+  decimalWheelList: {
+    height: DECIMAL_WHEEL_ITEM_HEIGHT * DECIMAL_WHEEL_VISIBLE_ROWS
+  },
+  decimalWheelListContent: {
+    paddingVertical: DECIMAL_WHEEL_ITEM_HEIGHT * 2
+  },
+  decimalWheelItem: {
+    height: DECIMAL_WHEEL_ITEM_HEIGHT,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  decimalWheelDigit: {
     color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: "700"
+    fontSize: 20,
+    fontWeight: "700",
+    opacity: 0.38,
+    transform: [{ scale: 0.82 }]
   },
-  decimalList: {
-    maxHeight: 260
+  decimalWheelDigitActive: {
+    color: colors.textPrimary,
+    opacity: 1,
+    transform: [{ scale: 1.08 }]
+  },
+  decimalWheelDigitNear: {
+    opacity: 0.7,
+    transform: [{ scale: 0.94 }]
+  },
+  decimalWheelDigitFar: {
+    opacity: 0.24,
+    transform: [{ scale: 0.76 }]
+  },
+  decimalWheelDotWrap: {
+    width: 20,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  decimalWheelDot: {
+    color: colors.textPrimary,
+    fontSize: 28,
+    fontWeight: "800",
+    marginTop: DECIMAL_WHEEL_ITEM_HEIGHT * 0.4
   },
   pickerList: {
     maxHeight: 360
