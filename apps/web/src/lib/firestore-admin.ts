@@ -22,7 +22,11 @@ function normalizePrivateKey(value: string | undefined): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/\\n/g, "\n");
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  return unquoted.replace(/\\n/g, "\n");
 }
 
 export function getFirebaseAdminConfig(): FirebaseAdminConfig {
