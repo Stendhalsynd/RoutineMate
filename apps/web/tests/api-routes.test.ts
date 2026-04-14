@@ -38,8 +38,11 @@ import { SESSION_MAX_AGE_DAYS } from "../src/lib/session-cookie";
 
 type SessionResponse = { data: { sessionId: string; userId: string } };
 
-process.env.GOOGLE_ANDROID_CLIENT_ID = process.env.GOOGLE_ANDROID_CLIENT_ID ?? "test-android-client-id";
-process.env.GOOGLE_WEB_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID ?? "test-web-client-id";
+process.env.GOOGLE_ANDROID_CLIENT_ID = "test-android-client-id";
+process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID = "test-android-client-id";
+process.env.GOOGLE_WEB_CLIENT_ID = "test-web-client-id";
+process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID = "test-web-client-id";
+process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "test-web-client-id";
 
 async function makeSession(): Promise<SessionResponse["data"]> {
   const sessionResponse = await createGuest(

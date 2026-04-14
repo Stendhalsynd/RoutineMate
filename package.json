@@ -11,6 +11,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:unit",
     "test:unit": "node --test --import tsx tests/unit/*.test.ts",
+    "firebase:emulators": "firebase emulators:start --only auth,firestore",
+    "firestore:migrate:notion": "tsx scripts/migrate-notion-to-firestore.ts",
+    "firestore:migrate:notion:dry-run": "tsx scripts/migrate-notion-to-firestore.ts --dry-run",
     "build": "npm run build --workspaces --if-present",
     "build:apk:preview": "bash scripts/build-apk.sh preview",
     "build:apk:release": "bash scripts/build-apk.sh release",
@@ -21,8 +24,12 @@
     "deploy:prod:verify": "bash scripts/deploy-and-verify.sh"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
     "@playwright/test": "^1.58.2",
     "expo": "~52.0.0",
+    "firebase": "^12.11.0",
+    "firebase-admin": "^13.4.0",
+    "firebase-tools": "^14.8.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

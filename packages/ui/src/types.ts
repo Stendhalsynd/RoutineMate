@@ -1,11 +1,15 @@
 export type ColorToken = {
   background: string;
   card: string;
+  cardAlt: string;
   border: string;
   textPrimary: string;
   textSecondary: string;
   brand: string;
   brandOn: string;
+  success: string;
+  info: string;
+  danger: string;
 };
 
 export type SpacingToken = {
@@ -21,4 +25,6 @@ export type UiTokens = {
   spacing: SpacingToken;
   cardRadius: number;
   progressHeight: number;
+  borderWidth: number;
+  shadowOffset: number;
 };

@@ -8,13 +8,14 @@
     "start": "next start",
     "lint": "echo 'web lint placeholder'",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx tests/*.test.ts"
+    "test": "node --test --import ./tests/setup-env.mjs --import tsx tests/*.test.ts"
   },
   "dependencies": {
     "@routinemate/api-contract": "0.1.0",
     "@routinemate/domain": "0.1.0",
     "@routinemate/ui": "0.1.0",
     "@tanstack/react-query": "^5.90.21",
+    "firebase": "^12.11.0",
     "next": "15.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"

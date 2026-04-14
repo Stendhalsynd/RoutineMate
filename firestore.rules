@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isIsoDate(value) {
+      return value is string && value.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isTimestampString(value) {
+      return value is string && value.size() >= 10;
+    }
+
+    function validDeleteMeta(data) {
+      return !('isDeleted' in data) || data.isDeleted is bool;
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if isOwner(userId);
+
+      match /goals/{goalId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /mealCheckins/{checkinId} {
+        allow read, create, update, delete: if isOwner(userId) &&
+          isIsoDate(request.resource.data.date) &&
+          isTimestampString(request.resource.data.createdAt) &&
+          validDeleteMeta(request.resource.data);
+      }
+
+      match /mealLogs/{mealId} {
+        allow read, create, update, delete: if isOwner(userId) &&
+          isIsoDate(request.resource.data.date) &&
+          isTimestampString(request.resource.data.createdAt) &&
+          validDeleteMeta(request.resource.data);
+      }
+
+      match /workoutLogs/{workoutId} {
+        allow read, create, update, delete: if isOwner(userId) &&
+          isIsoDate(request.resource.data.date) &&
+          isTimestampString(request.resource.data.createdAt) &&
+          validDeleteMeta(request.resource.data);
+      }
+
+      match /bodyMetrics/{metricId} {
+        allow read, create, update, delete: if isOwner(userId) &&
+          isIsoDate(request.resource.data.date) &&
+          isTimestampString(request.resource.data.createdAt) &&
+          validDeleteMeta(request.resource.data);
+      }
+
+      match /mealTemplates/{templateId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /workoutTemplates/{templateId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /reminderSettings/{settingsId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+    }
+  }
+}

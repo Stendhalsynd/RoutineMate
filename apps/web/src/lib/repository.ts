@@ -31,6 +31,7 @@ import {
   queryDatabasePages,
   updateDatabasePage
 } from "@/lib/notion-client";
+import { firestoreDataRepo, isFirestoreDataMode } from "@/lib/firestore-data-repository";
 
 type NotionPage = {
   id: string;
@@ -1082,7 +1083,7 @@ async function normalizeGoogleSessionByInput(input: GoogleCanonicalInput): Promi
   };
 }
 
-export const repo = {
+const legacyRepo = {
   async createGuestSession(deviceId?: string): Promise<Session> {
     if (isMemoryMode()) {
       const timestamp = nowIso();
@@ -2442,3 +2443,10 @@ export const repo = {
     store.reminderSettings.clear();
   }
 };
+
+export const repo = isFirestoreDataMode()
+  ? {
+      ...legacyRepo,
+      ...firestoreDataRepo
+    }
+  : legacyRepo;

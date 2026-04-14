@@ -114,3 +114,10 @@ test("mobile picker source no longer renders legacy quick-action labels", () => 
   assert.equal(appSource.includes("일의"), false);
   assert.equal(appSource.includes("소수"), false);
 });
+
+test("mobile picker highlight stays behind the selected digits", () => {
+  const appSource = fs.readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /<View pointerEvents="none" style=\{styles\.decimalWheelHighlight\} \/>/);
+  assert.match(appSource, /decimalWheelHighlight:\s*{[\s\S]*?zIndex:\s*0/);
+  assert.match(appSource, /decimalColumnRow:\s*{[\s\S]*?zIndex:\s*1/);
+});

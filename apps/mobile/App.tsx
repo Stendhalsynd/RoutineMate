@@ -3053,7 +3053,7 @@ export default function App(): React.JSX.Element {
                 : "00.0"}
             </Text>
             <View style={styles.decimalWheelFrame}>
-              <View style={styles.decimalWheelHighlight} />
+              <View pointerEvents="none" style={styles.decimalWheelHighlight} />
               <View style={styles.decimalColumnRow}>
                 <View style={styles.decimalWheelColumn}>
                   <FlatList
@@ -3821,14 +3821,16 @@ const styles = StyleSheet.create({
     backgroundColor: "#e5f5ef",
     borderWidth: 1,
     borderColor: "#b8dccc",
-    zIndex: 1
+    zIndex: 0
   },
   decimalColumnRow: {
     flexDirection: "row",
     gap: spacing.xs,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: spacing.sm
+    paddingHorizontal: spacing.sm,
+    position: "relative",
+    zIndex: 1
   },
   decimalWheelColumn: {
     width: 64
